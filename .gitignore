@@ -1,0 +1,34 @@
+# Credentials -- SASPy stores SAS passwords in these in the clear.
+# Broad on purpose: never let one reach history.
+*authinfo*
+.authinfo
+_authinfo
+
+# SASPy connection configs may embed hostnames, user names, and paths.
+sascfg_personal.py
+
+# Environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Editors / OS
+.DS_Store
+.idea/
+*.swp

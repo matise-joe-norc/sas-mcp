@@ -1,0 +1,41 @@
+[project]
+name = "sas-mcp"
+version = "0.1.0"
+description = "MCP server for writing, running, and validating SAS 9.4 code via SASPy"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "snoopy369" }]
+keywords = ["sas", "saspy", "mcp", "llm", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+    "mcp>=2.0",
+    "saspy>=5.4",
+    "pandas>=1.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+sas-mcp = "sas_mcp.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/snoopy369/sas-mcp"
+Issues = "https://github.com/snoopy369/sas-mcp/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sas_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
