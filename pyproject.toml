@@ -5,7 +5,7 @@ description = "MCP server for writing, running, and validating SAS 9.4 code via 
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "snoopy369" }]
+authors = [{ name = "Joe Matise" }]
 keywords = ["sas", "saspy", "mcp", "llm", "model-context-protocol"]
 classifiers = [
     "Development Status :: 3 - Alpha",
