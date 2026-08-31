@@ -27,8 +27,9 @@ dev = ["pytest>=7.0"]
 sas-mcp = "sas_mcp.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/snoopy369/sas-mcp"
-Issues = "https://github.com/snoopy369/sas-mcp/issues"
+Homepage = "https://github.com/matise-joe-norc/sas-mcp"
+Repository = "https://github.com/matise-joe-norc/sas-mcp"
+Issues = "https://github.com/matise-joe-norc/sas-mcp/issues"
 
 [build-system]
 requires = ["hatchling"]
