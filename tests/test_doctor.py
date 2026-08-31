@@ -170,7 +170,18 @@ def test_configured_java_path_missing_fails():
     assert checks[0].name == "java_path"
 
 
-def test_java_stub_without_runtime_fails(tmp_path, monkeypatch):
+# These two need a *runnable* stand-in for the java binary. A POSIX shell
+# script cannot be one on Windows, and the code under test is plain
+# platform-independent Python -- so they are exercised on POSIX, and Windows
+# gets test_unrunnable_java_reported_as_failure below instead.
+posix_only = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="fake java binary is a POSIX shell script",
+)
+
+
+@posix_only
+def test_java_stub_without_runtime_fails(tmp_path):
     """macOS ships /usr/bin/java as a stub that exits non-zero with no JRE."""
     fake = tmp_path / "java"
     fake.write_text(
@@ -184,6 +195,7 @@ def test_java_stub_without_runtime_fails(tmp_path, monkeypatch):
     assert "JRE" in checks[0].fix
 
 
+@posix_only
 def test_working_java_passes(tmp_path):
     fake = tmp_path / "java"
     fake.write_text(
@@ -195,6 +207,16 @@ def test_working_java_passes(tmp_path):
     checks = doctor.check_java({"java": str(fake)})
     assert checks[0].status == doctor.PASS
     assert "17.0.9" in checks[0].message
+
+
+def test_unrunnable_java_reported_as_failure(tmp_path):
+    """A file that exists but cannot be executed must be a clean FAIL, not a
+    crash -- this is the path Windows takes for a non-executable stub."""
+    fake = tmp_path / "java"
+    fake.write_text("not an executable\n")
+    checks = doctor.check_java({"java": str(fake)})
+    assert checks[0].status == doctor.FAIL
+    assert "JRE" in checks[0].fix or "java" in checks[0].message.lower()
 
 
 # --- encoding ----------------------------------------------------------------

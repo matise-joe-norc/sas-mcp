@@ -42,10 +42,26 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      # `doctor` exits non-zero when it finds problems, and a bare CI runner
+      # legitimately has no SAS configured -- so assert on its output, not its
+      # exit status. This also confirms it correctly detects the unconfigured
+      # state rather than silently claiming everything is fine.
       - name: Smoke-test the CLI
+        shell: bash
         run: |
           sas-mcp --version
-          sas-mcp doctor --no-network --json
+          sas-mcp doctor --no-network --json > doctor.json || true
+          python -c "
+          import json
+          d = json.load(open('doctor.json'))
+          assert 'verdict' in d and 'checks' in d, d
+          names = {c['name'] for c in d['checks']}
+          assert 'python' in names and 'saspy' in names, names
+          assert d['counts']['fail'] >= 1, 'expected the missing config to be reported'
+          assert any(c['name'] == 'config_file' and c['status'] == 'fail'
+                     for c in d['checks']), d['checks']
+          print('doctor reported', len(d['checks']), 'checks:', d['verdict'])
+          "
 
       - name: Smoke-test config generation
         shell: bash
