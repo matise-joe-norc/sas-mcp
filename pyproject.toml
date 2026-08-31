@@ -1,6 +1,8 @@
 [project]
 name = "sas-mcp"
-version = "0.1.0"
+# Single source of truth is __version__ in src/sas_mcp/__init__.py, so a
+# release cannot ship metadata that disagrees with what the CLI reports.
+dynamic = ["version"]
 description = "MCP server for writing, running, and validating SAS 9.4 code via SASPy"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +36,9 @@ Issues = "https://github.com/matise-joe-norc/sas-mcp/issues"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/sas_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sas_mcp"]

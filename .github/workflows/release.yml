@@ -1,0 +1,87 @@
+name: Release
+
+# Publishes to PyPI when a GitHub Release is published.
+#
+# Authentication is Trusted Publishing (OIDC): PyPI verifies the identity of
+# this workflow directly, so there is no API token to store, rotate, or leak.
+# See the repository README for the one-time PyPI configuration.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify only; do not publish"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+
+      - name: Check metadata
+        run: python -m twine check dist/*
+
+      # A release tagged v0.2.0 built from a tree that still says 0.1.0 would
+      # upload under the wrong version and cannot be undone -- PyPI does not
+      # allow re-uploading a filename. Fail before that happens.
+      - name: Verify tag matches package version
+        if: github.event_name == 'release'
+        run: |
+          python -m pip install -e .
+          pkg_version=$(python -c "import sas_mcp; print(sas_mcp.__version__)")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "package=$pkg_version tag=$tag"
+          if [ "$pkg_version" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ $pkg_version."
+            echo "Update __version__ in src/sas_mcp/__init__.py, or retag."
+            exit 1
+          fi
+
+      - name: Confirm the built package actually runs
+        run: |
+          python -m venv /tmp/check
+          /tmp/check/bin/pip install --quiet dist/*.whl
+          /tmp/check/bin/sas-mcp --version
+          /tmp/check/bin/python -c "from sas_mcp.server import build_server; build_server()"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+
+    # Scoped to this job so nothing else in the workflow can mint a token.
+    permissions:
+      id-token: write
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sas-mcp
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1

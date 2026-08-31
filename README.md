@@ -314,6 +314,45 @@ pytest
 
 The log parser and guardrails are pure functions with no SAS dependency, and
 the server tests run against a fake session — so the full suite runs anywhere.
+CI runs them on Linux, macOS, and Windows against Python 3.10, 3.12, and 3.14.
+
+### Releasing
+
+The version lives in exactly one place: `__version__` in
+[`src/sas_mcp/__init__.py`](src/sas_mcp/__init__.py). Packaging metadata reads
+it from there, so the two can't drift.
+
+1. Bump `__version__` and add a `CHANGELOG.md` entry.
+2. Commit, and confirm CI is green on `main`.
+3. Publish a GitHub Release tagged `vX.Y.Z`.
+
+That triggers [`release.yml`](.github/workflows/release.yml), which builds,
+runs `twine check`, installs the built wheel into a clean virtualenv to
+confirm it actually runs, **verifies the tag matches `__version__`**, and only
+then publishes. The tag check matters because PyPI will not let you re-upload
+a filename — a mismatched tag is not recoverable.
+
+`workflow_dispatch` runs the same build and verification without publishing,
+if you want a dry run first.
+
+#### One-time PyPI setup
+
+Publishing uses [Trusted Publishing](https://docs.pypi.org/trusted-publishers/),
+so there is no API token to store or rotate. Before the first release, add a
+*pending publisher* at
+[pypi.org/manage/account/publishing](https://pypi.org/manage/account/publishing/):
+
+| Field | Value |
+| --- | --- |
+| PyPI project name | `sas-mcp` |
+| Owner | `matise-joe-norc` |
+| Repository name | `sas-mcp` |
+| Workflow name | `release.yml` |
+| Environment name | `pypi` |
+
+Then create a `pypi` environment under the repository's
+Settings → Environments. Adding a required reviewer there gives you a manual
+approval gate before anything reaches PyPI.
 
 ## License
 
