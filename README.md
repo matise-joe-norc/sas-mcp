@@ -343,14 +343,20 @@ Two known gaps, stated plainly:
 
 ## Supported deployments
 
-All four SAS 9.4 setups SASPy handles, selected by your `sascfg_personal.py`:
+The SAS 9.4 setups SASPy handles, selected by your `sascfg_personal.py`:
 
-| Deployment | Access method | Needs |
-| --- | --- | --- |
-| Local Linux/UNIX install | STDIO | `saspath` |
-| Local Windows install | IOM | Java |
-| Intranet SAS server | IOM or SSH | Java, or SSH keys |
-| SAS OnDemand for Academics | IOM | Java, `~/.authinfo` |
+| Deployment | Access method | Needs | Verified |
+| --- | --- | --- | --- |
+| SAS OnDemand for Academics | IOM | Java, `~/.authinfo` | ✅ macOS + Windows |
+| Local Windows install | COM | pywin32 (no Java) | not yet |
+| Local Windows install | IOM | Java | not yet |
+| Local Linux/UNIX install | STDIO | `saspath` | not yet |
+| Intranet SAS server | IOM or SSH | Java, or SSH keys | not yet |
+
+"Not yet" means generated and unit-tested but not exercised against a running
+SAS — run `sas-mcp check` and it will tell you whether your setup works. If
+one of these fails for you, that's a bug worth
+[reporting](https://github.com/matise-joe-norc/sas-mcp/issues).
 
 SAS ODA is free but its terms are **academic and non-commercial use only**.
 

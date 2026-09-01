@@ -50,11 +50,11 @@ First release.
 
 ### Notes
 
-- Verified end to end against a live SAS 9.4M8 session on SAS OnDemand for
-  Academics. The local Windows and local UNIX deployment paths are generated
-  and unit-tested but have not been exercised against a running SAS; the
-  generated Windows classpath in particular is a best guess that the file
-  flags for review.
+- Verified end to end against live SAS 9.4M8 on SAS OnDemand for Academics,
+  from both macOS and Windows clients. Not yet exercised against a running
+  SAS: local Windows SAS (COM and IOM), local UNIX SAS, and intranet IOM or
+  SSH servers. Those paths are generated and unit-tested, and `sas-mcp check`
+  will tell you whether they work on your setup.
 - SASPy's IOM sessions start with `NONOTES`, which suppresses the very NOTEs
   the triage layer depends on. The session sets `options notes source;` on
   connect; without it, triage is blind on IOM connections.
