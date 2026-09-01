@@ -224,6 +224,7 @@ def test_all_tools_registered():
         "reset_session", "list_libraries", "list_datasets",
         "describe_dataset", "sample_rows", "compare_datasets",
         "run_sas_tests", "list_sas_configs", "use_sas_config",
+        "download_from_sas", "upload_to_sas", "list_sas_files",
     }
 
 

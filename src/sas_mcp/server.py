@@ -16,7 +16,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from . import __version__, schema, validate
+from . import __version__, files, schema, validate
 from .doctor import run_diagnostics
 from .guards import Policy
 from .session import ConfigLocked, SASConnectionError, SASSessionManager
@@ -56,11 +56,12 @@ def build_server(
     cfgfile: str | None = None,
     lock_config: bool = False,
     log_dir: str | None = None,
+    file_dir: str | None = None,
 ) -> MCPServer:
     """Construct the MCP server and bind its tools to one session manager."""
     mgr = manager or SASSessionManager(
         cfgname=cfgname, policy=policy, cfgfile=cfgfile,
-        lock_config=lock_config, log_dir=log_dir,
+        lock_config=lock_config, log_dir=log_dir, file_dir=file_dir,
     )
 
     mcp = MCPServer(
@@ -374,6 +375,88 @@ def build_server(
         except schema.InvalidName as exc:
             return {"status": "invalid_name", "error": str(exc)}
         except LookupError as exc:
+            return {"status": "not_found", "error": str(exc)}
+        except SASConnectionError as exc:
+            return _connection_error(exc)
+
+    # --- moving files between SAS and this machine ---------------------------
+
+    @mcp.tool(
+        name="download_from_sas",
+        description=(
+            "Copy a file from the SAS server's filesystem to this machine, "
+            "over the SAS connection. Works even when the two share no "
+            "filesystem -- for example a workbook written by PROC EXPORT on "
+            "SAS ODA. Returns the local path, which the user can open. Files "
+            "land in this server's transfer directory; arbitrary local paths "
+            "are not accepted."
+        ),
+        annotations=mutating,
+    )
+    def download_from_sas(
+        remote_path: str, local_name: str | None = None, overwrite: bool = False
+    ) -> dict[str, Any]:
+        """Fetch a file from the SAS server.
+
+        Args:
+            remote_path: Full path to the file on the SAS server.
+            local_name: Optional filename to save it as. Defaults to the
+                remote file's own name.
+            overwrite: Replace an existing local file of the same name.
+        """
+        try:
+            return files.download(mgr, remote_path, local_name, overwrite)
+        except files.TransferError as exc:
+            return {"status": "transfer_failed", "error": str(exc)}
+        except SASConnectionError as exc:
+            return _connection_error(exc)
+
+    @mcp.tool(
+        name="upload_to_sas",
+        description=(
+            "Send a file from this server's transfer directory to the SAS "
+            "server's filesystem, over the SAS connection. Only files already "
+            "in the transfer directory can be sent; to upload something else, "
+            "ask the user to copy it there first."
+        ),
+        annotations=mutating,
+    )
+    def upload_to_sas(
+        local_name: str, remote_path: str, overwrite: bool = False
+    ) -> dict[str, Any]:
+        """Send a file to the SAS server.
+
+        Args:
+            local_name: Filename within the transfer directory (not a path).
+            remote_path: Destination path on the SAS server.
+            overwrite: Replace the remote file if it exists.
+        """
+        try:
+            return files.upload(mgr, local_name, remote_path, overwrite)
+        except files.TransferError as exc:
+            return {"status": "transfer_failed", "error": str(exc),
+                    "transfer_directory": str(mgr.file_dir)}
+        except SASConnectionError as exc:
+            return _connection_error(exc)
+
+    @mcp.tool(
+        name="list_sas_files",
+        description=(
+            "List a directory on the SAS server's filesystem. Use it to "
+            "confirm where a step actually wrote its output before "
+            "downloading."
+        ),
+        annotations=read_only,
+    )
+    def list_sas_files(path: str) -> dict[str, Any]:
+        """List files in a directory on the SAS server.
+
+        Args:
+            path: Directory path on the SAS server.
+        """
+        try:
+            return files.list_remote(mgr, path)
+        except files.TransferError as exc:
             return {"status": "not_found", "error": str(exc)}
         except SASConnectionError as exc:
             return _connection_error(exc)

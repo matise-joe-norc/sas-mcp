@@ -372,6 +372,27 @@ Each writes a marker to the log that comes back as structured pass/fail. A
 failed assertion sets `status: "assertions_failed"` even when the log itself
 is clean — a green log with a red assertion is not a pass.
 
+## Getting files out of SAS
+
+SAS ODA runs in AWS and an intranet SAS server sits on another machine, so
+neither can see your local disk. SASPy transfers over the SAS connection
+itself, which works regardless:
+
+```
+run_sas:           proc export data=sashelp.class
+                     outfile="~/report.xlsx" dbms=xlsx replace; run;
+list_sas_files:    ~            -> report.xlsx
+download_from_sas: ~/report.xlsx -> /tmp/sas-mcp-files-xxxx/report.xlsx
+```
+
+`upload_to_sas` goes the other way, for sending a CSV or workbook in.
+
+Transfers are confined to one directory (`--file-dir PATH`, temporary by
+default). Downloads land there and uploads may only read from there, so the
+agent can neither overwrite arbitrary local files nor send arbitrary local
+files to a remote server. To upload something else, copy it into that
+directory first.
+
 ## Safety
 
 Writes are restricted to `WORK` by default. Also blocked unless you opt in:

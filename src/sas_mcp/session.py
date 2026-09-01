@@ -96,6 +96,7 @@ class SASSessionManager:
         cfgfile: str | None = None,
         lock_config: bool = False,
         log_dir: str | None = None,
+        file_dir: str | None = None,
     ):
         self.cfgname = cfgname
         # When an operator pins a configuration in the MCP client's config,
@@ -115,6 +116,8 @@ class SASSessionManager:
         self._log_dir_setting = log_dir
         self._log_dir: Path | None = None
         self._submit_seq = 0
+        self._file_dir_setting = file_dir
+        self._file_dir: Path | None = None
 
     # --- configuration selection ---------------------------------------------
 
@@ -304,6 +307,22 @@ class SASSessionManager:
                 d = Path(tempfile.mkdtemp(prefix="sas-mcp-logs-"))
             self._log_dir = d
         return self._log_dir
+
+    @property
+    def file_dir(self) -> Path:
+        """Directory files are transferred through, created on first use.
+
+        One directory serves both directions so the boundary is easy to state:
+        downloads land here, and uploads may only read from here.
+        """
+        if self._file_dir is None:
+            if self._file_dir_setting:
+                d = Path(self._file_dir_setting).expanduser()
+            else:
+                d = Path(tempfile.mkdtemp(prefix="sas-mcp-files-"))
+            d.mkdir(parents=True, exist_ok=True)
+            self._file_dir = d
+        return self._file_dir
 
     def _save_log(self, code: str, triage: LogTriage, log: str) -> str | None:
         """Write the findings and the raw log to one openable file."""

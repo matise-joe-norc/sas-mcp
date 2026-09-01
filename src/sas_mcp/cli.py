@@ -32,6 +32,14 @@ def _policy_args(p: argparse.ArgumentParser) -> None:
              "and the path is returned with the result.",
     )
     p.add_argument(
+        "--file-dir",
+        default=None,
+        metavar="PATH",
+        help="Directory used to transfer files to and from the SAS server "
+             "(default: a temporary directory). Downloads land here, and "
+             "uploads may only read from here.",
+    )
+    p.add_argument(
         "--allow-config-switch",
         action="store_true",
         help="With --config, treat it as a starting point rather than a "
@@ -225,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
     build_server(
         cfgname=args.cfgname, policy=policy, cfgfile=args.cfgfile,
         lock_config=lock_config, log_dir=args.log_dir,
+        file_dir=args.file_dir,
     ).run(transport="stdio")
     return 0
 
