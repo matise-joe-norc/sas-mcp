@@ -709,6 +709,56 @@ def run_diagnostics(
     return report
 
 
+def run_full_check(
+    cfgname: str | None = None,
+    probe_network: bool = True,
+    cfgfile: str | None = None,
+) -> dict[str, Any]:
+    """Configuration checks, then a live connection test.
+
+    Connection probes only run when the configuration checks pass: connecting
+    with a known-broken config produces a confusing second failure rather than
+    new information.
+    """
+    from . import connectivity
+
+    report = run_diagnostics(cfgname=cfgname, probe_network=probe_network,
+                             cfgfile=cfgfile)
+    report["connected"] = False
+
+    if report["counts"]["fail"]:
+        report["checks"].append(
+            Check("connection", INFO,
+                  "Skipped the live connection test because the configuration "
+                  "checks above failed.",
+                  "Fix those first, then re-run.").to_dict()
+        )
+        return report
+
+    live = connectivity.run_connection_checks(cfgname=cfgname, cfgfile=cfgfile)
+    report["checks"].extend(c.to_dict() for c in live)
+    for c in live:
+        if c.status in report["counts"]:
+            report["counts"][c.status] += 1
+
+    report["connected"] = any(
+        c.name == "connect" and c.status == PASS for c in live
+    )
+    if report["counts"]["fail"]:
+        report["verdict"] = "Blocked: fix the failures below before using SAS."
+    elif report["counts"]["warn"]:
+        report["verdict"] = "Connected to SAS, with warnings."
+    else:
+        report["verdict"] = "Connected to SAS. Everything works."
+
+    if report["counts"]["fail"] or report["counts"]["warn"]:
+        report["help"] = {
+            "troubleshooting": SASPY_TROUBLESHOOTING,
+            "configuration": SASPY_CONFIGURATION,
+        }
+    return report
+
+
 def format_report(report: dict[str, Any]) -> str:
     """Human-readable rendering for the CLI."""
     icons = {PASS: "PASS", WARN: "WARN", FAIL: "FAIL", INFO: "INFO"}

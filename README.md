@@ -72,8 +72,34 @@ trusting you to remember.
 Then verify:
 
 ```bash
-sas-mcp doctor
+sas-mcp doctor   # is the configuration sane? (never connects)
+sas-mcp check    # does it actually work? (starts a real SAS session)
 ```
+
+`doctor` is deliberately offline, so it still works when the connection is
+exactly what's broken. `check` runs those same checks and then connects:
+
+```
+[PASS] connect: Connected (SAS 9.04.01M8P02222023, encoding utf-8)
+[PASS] submit: DATA step ran; WORK._SASMCP_PROBE = 19 rows.
+[PASS] log_notes: Log triage is working: flagged suspicious
+       (missing_values_generated, uninitialized_variable).
+[PASS] schema: Schema discovery works (5 columns, 19 rows).
+[PASS] encoding: Non-ASCII round-trip is clean ('café').
+```
+
+The `log_notes` probe is the important one. It submits code with a misspelled
+variable — code that *must* be flagged — and fails if it isn't. A session
+with `NONOTES` set runs everything successfully while the triage layer sees
+nothing, so results look like clean successes while being wrong. A passing
+`submit` does not prove triage works; only this does.
+
+The `encoding` probe round-trips a non-ASCII string, since an encoding
+mismatch corrupts character data silently rather than raising.
+
+`check` uses a real SAS session, which counts against concurrency limits on
+ODA and licensed servers, and it cleans up the WORK tables it creates.
+`sas-mcp doctor --connect` is the same thing.
 
 It can also run unattended, for scripted or team setup:
 

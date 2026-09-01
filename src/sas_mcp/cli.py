@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, init_config
-from .doctor import format_report, run_diagnostics
+from .doctor import format_report, run_diagnostics, run_full_check
 from .guards import Policy
 
 
@@ -95,11 +95,35 @@ def main(argv: list[str] | None = None) -> int:
              "it is written to the config as a raw string.",
     )
 
-    doc = sub.add_parser("doctor", help="Diagnose SASPy configuration and exit.")
+    doc = sub.add_parser(
+        "doctor",
+        help="Diagnose SASPy configuration without connecting to SAS.",
+    )
     doc.add_argument("--config", dest="cfgname", default=None, metavar="NAME")
     doc.add_argument("--config-file", dest="cfgfile", default=None, metavar="PATH")
     doc.add_argument("--json", action="store_true", help="Emit JSON.")
     doc.add_argument(
+        "--no-network",
+        action="store_true",
+        help="Skip DNS and TCP reachability checks.",
+    )
+    doc.add_argument(
+        "--connect",
+        action="store_true",
+        help="Also start a real SAS session and verify it works "
+             "(same as `sas-mcp check`). Uses a SAS session, which counts "
+             "against concurrency limits on ODA and licensed servers.",
+    )
+
+    chk = sub.add_parser(
+        "check",
+        help="Run the configuration checks, then connect to SAS and verify "
+             "the connection actually works.",
+    )
+    chk.add_argument("--config", dest="cfgname", default=None, metavar="NAME")
+    chk.add_argument("--config-file", dest="cfgfile", default=None, metavar="PATH")
+    chk.add_argument("--json", action="store_true", help="Emit JSON.")
+    chk.add_argument(
         "--no-network",
         action="store_true",
         help="Skip DNS and TCP reachability checks.",
@@ -143,8 +167,11 @@ def main(argv: list[str] | None = None) -> int:
             return 130
         return 0
 
-    if command == "doctor":
-        report = run_diagnostics(
+    if command in {"doctor", "check"}:
+        # `check` is the primary spelling; `doctor --connect` is the alias.
+        connect = command == "check" or getattr(args, "connect", False)
+        runner = run_full_check if connect else run_diagnostics
+        report = runner(
             cfgname=args.cfgname,
             probe_network=not args.no_network,
             cfgfile=args.cfgfile,
