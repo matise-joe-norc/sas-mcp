@@ -147,20 +147,27 @@ When anything fails, the report also links
 which covers the IOM, Java, and encryption problems this tool can detect but
 not fix for you.
 
-### If SAS ODA fails with a Java or encryption error
+### SAS encryption jars (needed for ODA)
 
-SAS ODA requires an encrypted connection, which needs three SAS encryption
-jars: `sas.rutil.jar`, `sas.rutil.nls.jar`, and `sastpj.rutil.jar`. Current
-SASPy bundles them, but older versions did not, and a partial install shows up
-as a Java stack trace at connect time rather than anything mentioning files.
+**SASPy does not ship the SAS encryption jars** — `sas.rutil.jar`,
+`sas.rutil.nls.jar`, and `sastpj.rutil.jar` are absent from a clean install,
+though SASPy puts them on the IOM classpath regardless. They are a manual
+download.
 
-`sas-mcp doctor` checks for them directly. If they're missing it names the
-three files, links the
+Whether you need them depends on the server:
+
+- **SAS ODA always requires an encrypted connection.** Without these jars it
+  fails even when everything else is correct — as a Java error that never
+  mentions a missing file. `sas-mcp doctor` reports this as a **failure**.
+- **An intranet IOM server** may not require encryption, so doctor reports it
+  as **information** rather than treating a fresh install as broken.
+
+Either way, doctor names the missing files, links the
 [SAS download](https://sassoftware.github.io/saspy/configuration.html#attn-as-of-saspy-version-3-3-3-the-classpath-is-no-longer-required),
-and prints the exact folder to copy them into — SASPy's own
-`saspy/java/iomclient/`, since that is the path SASPy hardcodes when it builds
-the IOM classpath. They have to go there specifically; another directory won't
-be found.
+and prints the exact destination. They must go in SASPy's own
+`saspy/java/iomclient/` directory — that path is hardcoded where SASPy builds
+the IOM classpath, so no other location will be found. Doctor prints the
+resolved absolute path for your install.
 
 ## Connect your agent
 

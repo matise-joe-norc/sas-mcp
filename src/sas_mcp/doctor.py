@@ -441,15 +441,16 @@ def check_encoding(cfg: dict[str, Any]) -> Check:
     )
 
 
-# SASPy puts these on the IOM classpath unconditionally, so any missing file
-# fails at connect time with a Java stack trace rather than a useful message.
+# Bundled with SASPy. A missing one means a broken install, not a download.
 _IOMCLIENT_JARS = (
     "sas.security.sspi.jar",
     "sas.core.jar",
     "sas.svc.connection.jar",
 )
-# The encryption trio. SAS ODA requires an encrypted connection, so without
-# these a connection that is otherwise configured correctly still fails.
+# The encryption trio, which SASPy does NOT ship -- verified against a clean
+# 5.108.6 wheel. SASPy still puts them on the classpath unconditionally, so
+# they are a manual download for every IOM user whose server wants encryption.
+# SAS ODA always does; an intranet server may or may not.
 _ENCRYPTION_JARS = (
     "sas.rutil.jar",
     "sas.rutil.nls.jar",
@@ -469,12 +470,22 @@ ENCRYPTION_JAR_DOWNLOAD = (
 )
 
 
-def check_iom_jars(saspy_mod: Any) -> list[Check]:
+def is_oda_config(cfg: dict[str, Any]) -> bool:
+    """Whether this config points at SAS OnDemand for Academics."""
+    hosts = cfg.get("iomhost") or []
+    if isinstance(hosts, str):
+        hosts = [hosts]
+    return any("oda.sas.com" in str(h).lower() for h in hosts)
+
+
+def check_iom_jars(saspy_mod: Any, cfg: dict[str, Any] | None = None) -> list[Check]:
     """Verify the jars SASPy will place on the IOM classpath actually exist.
 
-    Recent SASPy bundles all of them, but the encryption jars have not always
-    shipped, and a partial install fails at connect time with a Java stack
-    trace that says nothing about missing files.
+    The encryption jars are not shipped with SASPy, so their absence is the
+    normal state of a fresh install. Whether that is a problem depends on the
+    server: SAS ODA always requires an encrypted connection, so missing jars
+    are a hard failure there. An intranet IOM server may not, so it is
+    reported for information rather than treated as broken.
     """
     out: list[Check] = []
     try:
@@ -492,18 +503,37 @@ def check_iom_jars(saspy_mod: Any) -> list[Check]:
     missing_tp = [j for j in _THIRDPARTY_JARS if not (thirdparty / j).is_file()]
 
     if missing_enc:
-        out.append(
-            _fail(
-                "encryption_jars",
-                f"SASPy's SAS encryption jars are missing "
-                f"({', '.join(missing_enc)}). SAS ODA requires an encrypted "
-                f"connection, so this fails even when everything else is "
-                f"configured correctly -- usually as a Java error at connect "
-                f"time rather than a clear message.",
-                f"Download them from SAS ({ENCRYPTION_JAR_DOWNLOAD}) and copy "
-                f"them into: {iomclient}",
-            )
+        oda = is_oda_config(cfg or {})
+        fix = (
+            f"Download them from SAS ({ENCRYPTION_JAR_DOWNLOAD}) and copy them "
+            f"into: {iomclient}"
         )
+        if oda:
+            out.append(
+                _fail(
+                    "encryption_jars",
+                    f"The SAS encryption jars are missing "
+                    f"({', '.join(missing_enc)}). SAS ODA requires an "
+                    f"encrypted connection, so this will fail even when "
+                    f"everything else is configured correctly -- usually as a "
+                    f"Java error that never mentions a missing file. SASPy "
+                    f"does not ship these; they are a manual download.",
+                    fix,
+                )
+            )
+        else:
+            out.append(
+                Check(
+                    "encryption_jars",
+                    INFO,
+                    f"The SAS encryption jars are not installed "
+                    f"({', '.join(missing_enc)}). SASPy does not ship these. "
+                    f"They are only needed if your SAS server requires an "
+                    f"encrypted connection; if it does, the connection fails "
+                    f"with a Java error that never mentions a missing file.",
+                    fix,
+                )
+            )
     if missing_core:
         out.append(
             _fail(
@@ -528,6 +558,10 @@ def check_iom_jars(saspy_mod: Any) -> list[Check]:
         out.append(
             _ok("iom_jars",
                 f"All IOM and encryption jars present in {java_dir}.")
+        )
+    elif not (missing_core or missing_tp):
+        out.append(
+            _ok("iom_jars", f"SASPy's bundled IOM jars are present in {java_dir}.")
         )
     return out
 
@@ -628,7 +662,7 @@ def run_diagnostics(
                 )
                 if method == "IOM":
                     checks.extend(check_java(config))
-                    checks.extend(check_iom_jars(saspy_mod))
+                    checks.extend(check_iom_jars(saspy_mod, config))
                     # A local Windows IOM session has no iomhost and needs no
                     # credentials, so only look for authinfo when the config
                     # actually authenticates somewhere.

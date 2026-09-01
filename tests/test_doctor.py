@@ -419,44 +419,97 @@ def _make_jar_tree(tmp_path, *, encryption=True, core=True, thirdparty=True):
     return FakeSaspyPkg(pkg), iom
 
 
+ODA_CFG = {"iomhost": ["odaws01-usw2.oda.sas.com"], "iomport": 8591}
+INTRANET_CFG = {"iomhost": "sas-prod.corp.internal", "iomport": 8591}
+
+
 def test_complete_jar_set_passes(tmp_path):
     mod, _ = _make_jar_tree(tmp_path)
-    checks = doctor.check_iom_jars(mod)
+    checks = doctor.check_iom_jars(mod, ODA_CFG)
     assert [c.status for c in checks] == [doctor.PASS]
 
 
-def test_missing_encryption_jars_reported_with_download_and_destination(tmp_path):
-    """SAS ODA requires an encrypted connection, so a missing encryption jar
-    fails a connection that is otherwise configured perfectly."""
+def test_missing_encryption_jars_fail_for_oda(tmp_path):
+    """ODA always requires an encrypted connection, so this is a hard stop."""
     mod, iom = _make_jar_tree(tmp_path, encryption=False)
-    checks = doctor.check_iom_jars(mod)
+    checks = doctor.check_iom_jars(mod, ODA_CFG)
     enc = next(c for c in checks if c.name == "encryption_jars")
     assert enc.status == doctor.FAIL
     assert "sas.rutil.jar" in enc.message
     assert doctor.ENCRYPTION_JAR_DOWNLOAD in enc.fix
     # The destination folder must be spelled out, not described.
     assert str(iom) in enc.fix
+    assert iom.name == "iomclient"
+
+
+def test_missing_encryption_jars_are_informational_for_other_servers(tmp_path):
+    """An intranet IOM server may not require encryption; SASPy never ships
+    these jars, so their absence is normal and must not read as broken."""
+    mod, iom = _make_jar_tree(tmp_path, encryption=False)
+    checks = doctor.check_iom_jars(mod, INTRANET_CFG)
+    enc = next(c for c in checks if c.name == "encryption_jars")
+    assert enc.status == doctor.INFO
+    # Still tells them where to get it and where to put it.
+    assert doctor.ENCRYPTION_JAR_DOWNLOAD in enc.fix
+    assert str(iom) in enc.fix
+
+
+def test_missing_encryption_jars_do_not_block_a_non_oda_run(tmp_path):
+    mod, _ = _make_jar_tree(tmp_path, encryption=False)
+    checks = doctor.check_iom_jars(mod, INTRANET_CFG)
+    assert not any(c.status == doctor.FAIL for c in checks)
+
+
+def test_missing_encryption_jars_without_config_are_informational(tmp_path):
+    mod, _ = _make_jar_tree(tmp_path, encryption=False)
+    checks = doctor.check_iom_jars(mod)
+    assert next(c for c in checks
+                if c.name == "encryption_jars").status == doctor.INFO
+
+
+@pytest.mark.parametrize(
+    "cfg,expected",
+    [
+        ({"iomhost": ["odaws01-usw2.oda.sas.com"]}, True),
+        ({"iomhost": "odaws02-euw1.oda.sas.com"}, True),
+        ({"iomhost": "sas.corp.internal"}, False),
+        ({}, False),
+    ],
+)
+def test_oda_config_detection(cfg, expected):
+    assert doctor.is_oda_config(cfg) is expected
 
 
 def test_partially_missing_encryption_jars_still_flagged(tmp_path):
     mod, iom = _make_jar_tree(tmp_path)
     (iom / "sastpj.rutil.jar").unlink()
-    checks = doctor.check_iom_jars(mod)
+    checks = doctor.check_iom_jars(mod, ODA_CFG)
     enc = next(c for c in checks if c.name == "encryption_jars")
     assert "sastpj.rutil.jar" in enc.message
     assert "sas.rutil.jar," not in enc.message  # only the missing one
 
 
+def test_bundled_jars_still_pass_when_only_encryption_missing(tmp_path):
+    """A fresh install is exactly this state; it must not look broken."""
+    mod, _ = _make_jar_tree(tmp_path, encryption=False)
+    checks = doctor.check_iom_jars(mod, INTRANET_CFG)
+    ok = next(c for c in checks if c.name == "iom_jars")
+    assert ok.status == doctor.PASS
+    assert "bundled" in ok.message
+
+
 def test_missing_core_jars_suggest_reinstall(tmp_path):
+    """These DO ship with SASPy, so a download link would be wrong advice."""
     mod, _ = _make_jar_tree(tmp_path, core=False)
-    checks = doctor.check_iom_jars(mod)
+    checks = doctor.check_iom_jars(mod, ODA_CFG)
     core = next(c for c in checks if c.name == "iom_jars")
+    assert core.status == doctor.FAIL
     assert "force-reinstall" in core.fix
 
 
 def test_missing_thirdparty_jars_reported(tmp_path):
     mod, _ = _make_jar_tree(tmp_path, thirdparty=False)
-    checks = doctor.check_iom_jars(mod)
+    checks = doctor.check_iom_jars(mod, ODA_CFG)
     assert any(c.name == "iom_thirdparty_jars" for c in checks)
 
 
