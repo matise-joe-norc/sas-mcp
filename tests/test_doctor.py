@@ -226,11 +226,24 @@ def test_other_keys_with_spaces_do_not_trigger_the_check(fake_home):
     assert not any(c.name == "authinfo_format" for c in checks)
 
 
+def _write_authinfo(path, text):
+    """Write using the encoding the reader will use.
+
+    doctor reads authinfo with the locale default, deliberately, because that
+    is what SASPy's `open(pwf, mode='r')` does. Writing UTF-8 here instead
+    would mangle non-ASCII on a cp1252 Windows runner -- and 0xA0 decodes to
+    NBSP, which str.split() treats as whitespace, so the line would fail the
+    field count rather than reach the charset check.
+    """
+    import locale
+    path.write_text(text, encoding=locale.getpreferredencoding(False))
+
+
 def test_non_ascii_password_is_flagged(fake_home):
     """SASPy sends the password UTF-8 encoded to its Java bridge; a charset
     mismatch there corrupts it with nothing pointing at the password."""
     p = fake_home / ".authinfo"
-    p.write_text("oda user me password pàssword\n", encoding="utf-8")
+    _write_authinfo(p, "oda user me password pàssword\n")
     p.chmod(0o600)
     checks = doctor.check_authinfo({"authkey": "oda"})
     w = next(c for c in checks if c.name == "authinfo_password_charset")
@@ -241,7 +254,7 @@ def test_non_ascii_password_is_flagged(fake_home):
 
 def test_non_ascii_warning_never_prints_the_password(fake_home):
     p = fake_home / ".authinfo"
-    p.write_text("oda user me password sûpersecret\n", encoding="utf-8")
+    _write_authinfo(p, "oda user me password sûpersecret\n")
     p.chmod(0o600)
     checks = doctor.check_authinfo({"authkey": "oda"})
     w = next(c for c in checks if c.name == "authinfo_password_charset")

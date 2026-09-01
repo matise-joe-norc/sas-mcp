@@ -197,6 +197,13 @@ Two fixes:
 
 `sas-mcp doctor` checks the field count directly and names this cause.
 
+**On Windows, also check the file's encoding.** SASPy opens `_authinfo` with
+`open(pwf, mode='r')` — the *locale* default, typically cp1252, not UTF-8. If
+your editor saved it as UTF-8 and the password contains a non-ASCII character,
+the bytes decode into something longer: `à` becomes `Ã` + `\xa0`, and `\xa0`
+(NBSP) counts as whitespace to `split()`, so the line gains a field and is
+skipped. Save the file as ANSI/cp1252, or use an ASCII-only password.
+
 ### SAS encryption jars (needed for ODA)
 
 **SASPy does not ship the SAS encryption jars** — `sas.rutil.jar`,
