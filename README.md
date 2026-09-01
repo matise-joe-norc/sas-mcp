@@ -257,6 +257,35 @@ claude mcp add sas -- sas-mcp serve
 Add policy flags to `args` as needed, e.g.
 `["serve", "--config", "oda", "--writable-libs", "STAGE"]`.
 
+### Choosing between multiple SAS environments
+
+If your `sascfg_personal.py` defines more than one configuration, decide who
+picks:
+
+**Pin it in the client config** — the agent uses this one and cannot switch:
+
+```json
+{
+  "servers": {
+    "sas": { "command": "sas-mcp", "args": ["serve", "--config", "oda"] }
+  }
+}
+```
+
+Add `--allow-config-switch` to make it a starting point the agent may change
+instead of a restriction.
+
+**Or leave `--config` off**, and the agent chooses: `list_sas_configs` shows
+what's available with each one's access method and target server, and
+`use_sas_config` selects one. With exactly one configuration defined it's used
+automatically and nothing is asked.
+
+Either way the server never blocks waiting for an answer. Left to itself,
+SASPy prompts on **stdin** for a configuration name — and on a stdio MCP
+server stdin is the JSON-RPC stream, so the prompt would consume protocol
+bytes and hang the client. `sas-mcp` disables SASPy's prompting entirely and
+returns the choice as data instead.
+
 ## Tools
 
 | Tool | Purpose |

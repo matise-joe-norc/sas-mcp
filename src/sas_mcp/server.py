@@ -19,7 +19,7 @@ from mcp.types import ToolAnnotations
 from . import __version__, schema, validate
 from .doctor import run_diagnostics
 from .guards import Policy
-from .session import SASConnectionError, SASSessionManager
+from .session import ConfigLocked, SASConnectionError, SASSessionManager
 
 INSTRUCTIONS = """\
 This server runs SAS 9.4 code through SASPy.
@@ -40,6 +40,10 @@ Working effectively:
    the policy.
 5. `run_sas` returns triaged findings, not the whole log. Call `get_last_log`
    only when the triage is not enough to diagnose a problem.
+6. If a tool returns `status: "config_required"`, the user has more than one
+   SAS environment configured. The response lists them; call `use_sas_config`
+   to pick one. If the user has not indicated which they want, ask -- running
+   against the wrong SAS environment is worse than pausing to check.
 """
 
 
@@ -48,10 +52,12 @@ def build_server(
     policy: Policy | None = None,
     manager: SASSessionManager | None = None,
     cfgfile: str | None = None,
+    lock_config: bool = False,
 ) -> MCPServer:
     """Construct the MCP server and bind its tools to one session manager."""
     mgr = manager or SASSessionManager(
-        cfgname=cfgname, policy=policy, cfgfile=cfgfile
+        cfgname=cfgname, policy=policy, cfgfile=cfgfile,
+        lock_config=lock_config,
     )
 
     mcp = MCPServer(
@@ -66,9 +72,22 @@ def build_server(
                                idempotent_hint=False, open_world_hint=False)
 
     def _connection_error(exc: Exception) -> dict[str, Any]:
+        text = str(exc)
+        # A config choice is a question for the caller, not a fault to
+        # diagnose -- answer it with the options rather than sending the agent
+        # to the doctor.
+        if "configurations, so one has to be chosen" in text:
+            return {
+                "status": "config_required",
+                "error": text,
+                "configs": mgr.available_configs(),
+                "next_step": "Call use_sas_config with one of these names. If "
+                             "the user has not said which SAS environment they "
+                             "want, ask them rather than guessing.",
+            }
         return {
             "status": "connection_error",
-            "error": str(exc),
+            "error": text,
             "next_step": "Run the sas_doctor tool; it reports configuration, "
                          "Java, credential, and network problems with fixes.",
             "troubleshooting": (
@@ -119,6 +138,68 @@ def build_server(
             return mgr.status()
         except SASConnectionError as exc:
             return _connection_error(exc)
+
+    @mcp.tool(
+        name="list_sas_configs",
+        description=(
+            "List the SAS configurations available in the user's SASPy setup, "
+            "with the access method and target server for each. Call this when "
+            "connecting reports that a configuration must be chosen, or when "
+            "the user mentions a specific SAS environment by name."
+        ),
+        annotations=read_only,
+    )
+    def list_sas_configs() -> dict[str, Any]:
+        """Show the SAS configurations that can be connected to."""
+        configs = mgr.available_configs()
+        if mgr.lock_config:
+            note = (
+                f"This server is pinned to {mgr.cfgname!r} by its startup "
+                f"options; switching is disabled."
+            )
+        elif len(configs) > 1:
+            note = ("Select one with use_sas_config before running code.")
+        else:
+            note = None
+        return {
+            "active": mgr.cfgname,
+            "locked": mgr.lock_config,
+            "configs": configs,
+            "note": note,
+        }
+
+    @mcp.tool(
+        name="use_sas_config",
+        description=(
+            "Select which SAS configuration to connect to, by name. Ends any "
+            "current SAS session, so WORK data sets and librefs from the "
+            "previous configuration are lost. Use when the user names a SAS "
+            "environment, or after list_sas_configs shows several."
+        ),
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True,
+                                    open_world_hint=False),
+    )
+    def use_sas_config(name: str) -> dict[str, Any]:
+        """Switch to a named SAS configuration.
+
+        Args:
+            name: A configuration name from list_sas_configs.
+        """
+        try:
+            return {"status": "ok", **mgr.set_config(name)}
+        except ConfigLocked as exc:
+            return {
+                "status": "config_locked",
+                "error": str(exc),
+                "active_config": mgr.cfgname,
+                "next_step": "Tell the user the server is pinned to this "
+                             "configuration and that changing it means "
+                             "restarting the MCP server with different "
+                             "options. Do not try to work around it.",
+            }
+        except SASConnectionError as exc:
+            return {"status": "invalid_config", "error": str(exc),
+                    "next_step": "Call list_sas_configs to see valid names."}
 
     # --- running code --------------------------------------------------------
 

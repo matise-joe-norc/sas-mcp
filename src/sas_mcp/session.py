@@ -34,6 +34,10 @@ class SASConnectionError(RuntimeError):
     """Raised when a SAS session cannot be established."""
 
 
+class ConfigLocked(RuntimeError):
+    """Raised when switching configurations is disallowed by the operator."""
+
+
 @dataclass
 class SubmitResult:
     """Everything a caller needs about one submit, minus the raw log."""
@@ -77,8 +81,13 @@ class SASSessionManager:
         cfgname: str | None = None,
         policy: Policy | None = None,
         cfgfile: str | None = None,
+        lock_config: bool = False,
     ):
         self.cfgname = cfgname
+        # When an operator pins a configuration in the MCP client's config,
+        # they usually mean "use this one" -- not "start here". Locking makes
+        # that binding actually hold against an agent that decides otherwise.
+        self.lock_config = lock_config and bool(cfgname)
         # An explicit config path is the only unambiguous way to select a
         # config: SASPy otherwise searches its own package directory first,
         # then the working directory, and only then ~/.config/saspy, so a
@@ -89,6 +98,69 @@ class SASSessionManager:
         self._lock = threading.RLock()
         self._last_log = ""
         self._macros_loaded = False
+
+    # --- configuration selection ---------------------------------------------
+
+    def available_configs(self) -> list[dict[str, Any]]:
+        """Configurations defined in sascfg_personal.py, without connecting."""
+        from .doctor import list_available_configs
+
+        return list_available_configs(self.cfgfile)
+
+    def _resolve_cfgname(self) -> str | None:
+        """Pick a config when none was given, or explain why we cannot.
+
+        One config is unambiguous, so use it. Several is a real choice that
+        only the caller can make -- and SASPy would otherwise block on stdin
+        asking for it.
+        """
+        configs = self.available_configs()
+        if len(configs) == 1:
+            return configs[0]["name"]
+        if len(configs) > 1:
+            listing = "\n".join(
+                f"  - {c['name']}  ({c['access_method']}"
+                + (f" -> {c['target']}" if c["target"] else "")
+                + ")"
+                for c in configs
+            )
+            raise SASConnectionError(
+                f"This SASPy installation defines {len(configs)} "
+                f"configurations, so one has to be chosen before connecting:\n"
+                f"{listing}\n\n"
+                f"Select one with the use_sas_config tool, or start the server "
+                f"with --config <name>."
+            )
+        return None  # let SASPy fall back to its own defaults
+
+    def set_config(self, name: str) -> dict[str, Any]:
+        """Switch the active configuration, ending any current session."""
+        if self.lock_config:
+            raise ConfigLocked(
+                f"This server is pinned to the {self.cfgname!r} configuration "
+                f"and cannot switch to {name!r}. The restriction comes from "
+                f"the MCP server's own startup options, not from anything the "
+                f"user said in this conversation, so it cannot be worked "
+                f"around here."
+            )
+        configs = self.available_configs()
+        names = [c["name"] for c in configs]
+        if names and name not in names:
+            raise SASConnectionError(
+                f"No configuration named {name!r}. Available: "
+                f"{', '.join(names)}."
+            )
+        with self._lock:
+            was_connected = self._sas is not None
+            if was_connected:
+                self.disconnect()
+            self.cfgname = name
+            self._macros_loaded = False
+        return {
+            "config_name": name,
+            "previous_session_ended": was_connected,
+            "details": next((c for c in configs if c["name"] == name), None),
+        }
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -108,9 +180,15 @@ class SASSessionManager:
                     "saspy is not installed. Install it with: pip install saspy"
                 ) from exc
 
-            kwargs: dict[str, Any] = {"results": "TEXT"}
-            if self.cfgname:
-                kwargs["cfgname"] = self.cfgname
+            # prompt=False is not optional here. SASPy prompts on stdin when
+            # it needs a config name or credentials, and on a stdio MCP server
+            # stdin IS the JSON-RPC stream -- prompting would consume protocol
+            # bytes and hang the client forever. With prompting off, SASPy
+            # raises instead, which we can turn into an actionable message.
+            kwargs: dict[str, Any] = {"results": "TEXT", "prompt": False}
+            cfgname = self.cfgname or self._resolve_cfgname()
+            if cfgname:
+                kwargs["cfgname"] = cfgname
             if self.cfgfile:
                 kwargs["cfgfile"] = str(Path(self.cfgfile).expanduser())
             try:
@@ -269,4 +347,5 @@ class SASSessionManager:
             "writable_libs": sorted(self.policy.writable_libs),
             "allow_os_escape": self.policy.allow_os_escape,
             "allow_destructive": self.policy.allow_destructive,
+            "config_locked": self.lock_config,
         }

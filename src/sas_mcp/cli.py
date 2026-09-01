@@ -18,8 +18,16 @@ def _policy_args(p: argparse.ArgumentParser) -> None:
         dest="cfgname",
         default=None,
         metavar="NAME",
-        help="SASPy configuration name from sascfg_personal.py "
-             "(default: SASPy's own default).",
+        help="SASPy configuration name from sascfg_personal.py. When set, the "
+             "server is pinned to it and the agent cannot switch away; pass "
+             "--allow-config-switch to permit switching. When unset, the agent "
+             "selects a configuration (automatically if only one exists).",
+    )
+    p.add_argument(
+        "--allow-config-switch",
+        action="store_true",
+        help="With --config, treat it as a starting point rather than a "
+             "restriction, letting the agent switch configurations.",
     )
     p.add_argument(
         "--config-file",
@@ -192,17 +200,23 @@ def main(argv: list[str] | None = None) -> int:
         allow_destructive=args.allow_destructive,
     )
 
+    lock_config = bool(args.cfgname) and not args.allow_config_switch
+
     # Stdout is the MCP transport; anything printed there corrupts the protocol.
+    cfg_note = ""
+    if args.cfgname:
+        cfg_note = f", config: {args.cfgname}" + ("" if lock_config else " (switchable)")
     print(
         f"sas-mcp {__version__} starting (writable: "
-        f"{', '.join(sorted(policy.writable_libs))})",
+        f"{', '.join(sorted(policy.writable_libs))}{cfg_note})",
         file=sys.stderr,
     )
 
     from .server import build_server
 
     build_server(
-        cfgname=args.cfgname, policy=policy, cfgfile=args.cfgfile
+        cfgname=args.cfgname, policy=policy, cfgfile=args.cfgfile,
+        lock_config=lock_config,
     ).run(transport="stdio")
     return 0
 

@@ -222,6 +222,42 @@ def load_config(path: Path) -> tuple[Check, dict[str, Any]]:
     return _ok("config_parse", f"Configurations: {', '.join(configs)}"), configs
 
 
+def list_available_configs(cfgfile: str | None = None) -> list[dict[str, Any]]:
+    """Enumerate the configurations defined in sascfg_personal.py.
+
+    Read without connecting, so an agent can present the choice before a SAS
+    session is ever started.
+    """
+    try:
+        import saspy
+    except ImportError:
+        return []
+
+    _, path = find_config(saspy, cfgfile)
+    if path is None:
+        return []
+    _, configs = load_config(path)
+
+    out: list[dict[str, Any]] = []
+    for name, cfg in configs.items():
+        method = access_method(cfg)
+        target = (
+            cfg.get("iomhost") or cfg.get("url") or cfg.get("host")
+            or cfg.get("saspath") or ("local Windows SAS" if method in
+                                      {"COM", "IOM"} else None)
+        )
+        if isinstance(target, list):
+            target = target[0] if target else None
+        out.append({
+            "name": name,
+            "access_method": method,
+            "target": str(target) if target else None,
+            "is_oda": is_oda_config(cfg),
+            "encoding": cfg.get("encoding"),
+        })
+    return out
+
+
 def access_method(cfg: dict[str, Any]) -> str:
     """Infer which SASPy access method a config selects.
 

@@ -76,9 +76,13 @@ def make(policy=None, log=CLEAN_LOG):
     return build_server(manager=mgr), mgr, fake
 
 
-def call(server, name, **args):
-    """Invoke a tool and return its structured payload as a plain dict."""
-    result = asyncio.run(server.call_tool(name, args))
+def call(server, tool, **args):
+    """Invoke a tool and return its structured payload as a plain dict.
+
+    The tool name is `tool`, not `name`, so it cannot collide with a tool
+    argument that happens to be called `name`.
+    """
+    result = asyncio.run(server.call_tool(tool, args))
     assert not result.is_error, result.content
     if result.structured_content is not None:
         return result.structured_content
@@ -205,7 +209,7 @@ def test_all_tools_registered():
         "sas_doctor", "session_status", "run_sas", "get_last_log",
         "reset_session", "list_libraries", "list_datasets",
         "describe_dataset", "sample_rows", "compare_datasets",
-        "run_sas_tests",
+        "run_sas_tests", "list_sas_configs", "use_sas_config",
     }
 
 
@@ -222,6 +226,110 @@ def test_doctor_runs_without_a_connection():
     out = call(server, "sas_doctor", probe_network=False)
     assert "verdict" in out
     assert out["counts"]["pass"] >= 1
+
+
+# --- multiple configurations -------------------------------------------------
+
+TWO_CONFIGS = [
+    {"name": "oda", "access_method": "IOM", "target": "odaws01-usw2.oda.sas.com",
+     "is_oda": True, "encoding": "utf-8"},
+    {"name": "wincom", "access_method": "COM", "target": "local Windows SAS",
+     "is_oda": False, "encoding": "windows-1252"},
+]
+
+
+def multi(policy=None, lock=False, cfgname=None):
+    mgr = SASSessionManager(policy=policy or Policy.from_spec(),
+                            cfgname=cfgname, lock_config=lock)
+    mgr.available_configs = lambda: TWO_CONFIGS
+    fake = FakeSAS()
+    return build_server(manager=mgr), mgr, fake
+
+
+def test_running_code_with_several_configs_asks_rather_than_hanging():
+    """SASPy would prompt on stdin here -- which on a stdio server is the
+    JSON-RPC stream itself, hanging the client."""
+    server, _, _ = multi()
+    out = call(server, "run_sas", code="%put Hello, World;")
+    assert out["status"] == "config_required"
+    assert [c["name"] for c in out["configs"]] == ["oda", "wincom"]
+    assert "use_sas_config" in out["next_step"]
+
+
+def test_config_required_tells_the_agent_to_ask_the_user():
+    server, _, _ = multi()
+    out = call(server, "run_sas", code="%put x;")
+    assert "ask them rather than guessing" in out["next_step"]
+
+
+def test_list_sas_configs_reports_choices():
+    server, _, _ = multi()
+    out = call(server, "list_sas_configs")
+    assert [c["name"] for c in out["configs"]] == ["oda", "wincom"]
+    assert out["locked"] is False
+
+
+def test_use_sas_config_switches():
+    server, mgr, _ = multi()
+    out = call(server, "use_sas_config", name="wincom")
+    assert out["status"] == "ok"
+    assert mgr.cfgname == "wincom"
+
+
+def test_use_sas_config_rejects_unknown_name():
+    server, _, _ = multi()
+    out = call(server, "use_sas_config", name="nope")
+    assert out["status"] == "invalid_config"
+    assert "oda, wincom" in out["error"]
+
+
+def test_switching_ends_the_current_session():
+    """WORK and librefs belong to the old session and must not appear to
+    survive the switch."""
+    server, mgr, _ = multi()
+    fake = FakeSAS()
+    mgr._sas = fake
+    out = call(server, "use_sas_config", name="wincom")
+    assert out["previous_session_ended"] is True
+    assert fake.ended is True
+    assert mgr._sas is None
+
+
+# --- pinning a configuration -------------------------------------------------
+
+
+def test_pinned_config_cannot_be_switched():
+    server, _, _ = multi(lock=True, cfgname="oda")
+    out = call(server, "use_sas_config", name="wincom")
+    assert out["status"] == "config_locked"
+    assert out["active_config"] == "oda"
+    assert "restarting the MCP server" in out["next_step"]
+
+
+def test_pinned_config_is_advertised_as_locked():
+    server, _, _ = multi(lock=True, cfgname="oda")
+    out = call(server, "list_sas_configs")
+    assert out["locked"] is True
+    assert "pinned" in out["note"]
+
+
+def test_pinned_config_reported_in_session_status():
+    server, mgr, _ = multi(lock=True, cfgname="oda")
+    mgr._sas = FakeSAS()
+    out = call(server, "session_status")
+    assert out["policy"]["config_locked"] is True
+
+
+def test_lock_is_ignored_without_a_config_name():
+    """Locking to nothing would just break switching for no reason."""
+    mgr = SASSessionManager(lock_config=True)
+    assert mgr.lock_config is False
+
+
+def test_unpinned_config_allows_switching():
+    server, mgr, _ = multi(lock=False, cfgname="oda")
+    assert call(server, "use_sas_config", name="wincom")["status"] == "ok"
+    assert mgr.cfgname == "wincom"
 
 
 # --- validation tools --------------------------------------------------------
