@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-01
+
+Everything in this release came from running 0.1.0 against real SAS.
+
+### Fixed
+
+- **`DATA=` is no longer treated as a write.** `proc freq data=sashelp.prdsale`
+  was rejected as an illegal write to a protected library. The rule matched
+  `(?:base|data)=`, which is wrong even for PROC APPEND, where `BASE=` is the
+  target and `DATA=` is only the source. The effect was severe: **every**
+  ordinary PROC against a library outside `WORK` was blocked, including plain
+  `SASHELP` reads. Anyone using 0.1.0 against real data hit this.
+- **PROC DATASETS is no longer assumed to be a write.** Any `lib=` counted,
+  so `proc datasets lib=sashelp; contents data=class; quit;` was blocked. It
+  now fires only when the block contains a mutating statement, and the
+  violation names the verb.
+- **Multiple SAS configurations no longer hang the client.** With more than
+  one configuration defined and none selected, SASPy prompts on stdin for a
+  name — and on a stdio MCP server stdin is the JSON-RPC stream, so the
+  prompt consumed protocol bytes and blocked forever. SASPy is now started
+  with `prompt=False` so it can never read the transport.
+
+### Added
+
+- **`list_sas_configs` and `use_sas_config`.** The configuration choice is
+  returned as data (`status: "config_required"`) rather than asked for on a
+  stream nobody is reading. A single configuration is still used
+  automatically.
+- **`download_from_sas`, `upload_to_sas`, and `list_sas_files`.** SASPy
+  transfers over the SAS connection, so a workbook written by `PROC EXPORT`
+  on SAS ODA — which runs in AWS and cannot see your disk — can be fetched to
+  your machine. Both directions are confined to one transfer directory: a
+  download taking an arbitrary local path could overwrite anything you can
+  write, and an upload taking one could send any readable file to a remote
+  server.
+- **`log_file` on every result.** Previously a failure advised checking the
+  log without providing one. Each submission is now written to a file holding
+  the status, the submitted code, every finding with its explanation and
+  context, and the complete raw log; failures name that path in `next_step`.
+- **Output lands in the working folder.** `./sas-mcp/files` and
+  `./sas-mcp/logs`, so downloads and logs appear in the editor's file tree
+  rather than a temporary directory. The directory is `.gitignore`d on
+  creation, since SAS output can contain real data. `--file-dir` and
+  `--log-dir` override; both fall back to a temporary directory when the
+  working directory cannot be written.
+
+### Changed
+
+- **`--config NAME` now pins the server to that configuration** and refuses
+  switches, on the reasoning that naming one in `mcp.json` means "use this",
+  not "start here". `--allow-config-switch` restores the previous behaviour.
+
+### Verified
+
+- SAS OnDemand for Academics from macOS and Windows clients.
+- An intranet SAS server over IOM from a Windows client.
+- Still not exercised against a running SAS: local Windows SAS (COM and IOM),
+  local UNIX SAS, and SSH. `sas-mcp check` will tell you whether they work on
+  your setup.
+
 ## [0.1.0] - 2026-08-31
 
 First release.
@@ -61,5 +121,6 @@ First release.
 - The guardrails are a defense against model error, not a security boundary.
   SAS can generate code at run time, so no static scan is complete.
 
-[Unreleased]: https://github.com/matise-joe-norc/sas-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/matise-joe-norc/sas-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/matise-joe-norc/sas-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/matise-joe-norc/sas-mcp/releases/tag/v0.1.0
