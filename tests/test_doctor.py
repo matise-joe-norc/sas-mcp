@@ -173,6 +173,59 @@ def test_missing_authkey_entry_fails(fake_home):
     assert "other" in entry.message
 
 
+def test_password_with_a_space_is_rejected(fake_home):
+    """SASPy requires exactly 5 whitespace-separated fields, so a password
+    containing a space makes it skip the line and report a missing key."""
+    p = fake_home / ".authinfo"
+    p.write_text("oda user me@example.com password my secret pw\n")
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    bad = next(c for c in checks if c.name == "authinfo_format")
+    assert bad.status == doctor.FAIL
+    assert "space" in bad.message
+    assert "PWENCODE" in bad.fix or "{SAS00x}" in bad.fix
+
+
+def test_truncated_authinfo_line_is_rejected(fake_home):
+    p = fake_home / ".authinfo"
+    p.write_text("oda user me@example.com\n")
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    assert any(c.name == "authinfo_format" and c.status == doctor.FAIL
+               for c in checks)
+
+
+def test_trailing_comment_on_the_credential_line_is_rejected(fake_home):
+    """Extra tokens break it in the same way, from the other direction."""
+    p = fake_home / ".authinfo"
+    p.write_text("oda user me password pw  # my server\n")
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    assert any(c.name == "authinfo_format" for c in checks)
+
+
+def test_well_formed_line_passes(fake_home):
+    p = fake_home / ".authinfo"
+    p.write_text("oda user me@example.com password nospaceshere\n")
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    assert not any(c.name == "authinfo_format" for c in checks)
+    assert any(c.name == "authinfo_entry" and c.status == doctor.PASS
+               for c in checks)
+
+
+def test_other_keys_with_spaces_do_not_trigger_the_check(fake_home):
+    """Only the configured authkey's line matters."""
+    p = fake_home / ".authinfo"
+    p.write_text(
+        "other user someone password has spaces here\n"
+        "oda user me password fine\n"
+    )
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    assert not any(c.name == "authinfo_format" for c in checks)
+
+
 def test_sas_encoded_password_is_accepted(fake_home):
     """Verified against live SAS ODA: a {SAS00x} password authenticates fine,
     so it must not be reported as a problem."""

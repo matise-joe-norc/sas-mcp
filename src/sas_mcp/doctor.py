@@ -345,15 +345,53 @@ def check_authinfo(cfg: dict[str, Any]) -> list[Check]:
             out.append(_warn("authinfo_entry", f"Could not read {path}: {exc}"))
             return out
 
-        keys = [
-            ln.split()[0]
-            for ln in text.splitlines()
-            if ln.strip() and not ln.lstrip().startswith("#")
-        ]
-        if authkey in keys:
+        # SASPy accepts a credential line only when it splits into EXACTLY
+        # five whitespace-separated tokens (sasioiom.py: `len(ls) == 5`). A
+        # password containing a space produces six, and the line is skipped
+        # silently -- reported only as "did not find key", which sends people
+        # looking for a missing entry rather than a mis-parsed one.
+        keys = []
+        malformed: list[tuple[str, int]] = []
+        for ln in text.splitlines():
+            if not ln.strip() or ln.lstrip().startswith("#"):
+                continue
+            parts = ln.split()
+            keys.append(parts[0])
+            if parts[0] == authkey and not (
+                len(parts) == 5 and parts[1] == "user" and parts[3] == "password"
+            ):
+                malformed.append((ln, len(parts)))
+
+        if malformed:
+            _, n = malformed[0]
+            if n > 5:
+                out.append(
+                    _fail(
+                        "authinfo_format",
+                        f"The {authkey!r} line has {n} whitespace-separated "
+                        f"fields; SASPy accepts exactly 5 and skips the line "
+                        f"otherwise. A password containing a space is the "
+                        f"usual cause, and it fails as 'did not find key' "
+                        f"rather than anything about the password.",
+                        "Remove spaces from the password, or store a "
+                        "PWENCODE {SAS00x} value instead -- those are always "
+                        "single-token. Format: "
+                        "`<key> user <username> password <password>`",
+                    )
+                )
+            else:
+                out.append(
+                    _fail(
+                        "authinfo_format",
+                        f"The {authkey!r} line does not match the format SASPy "
+                        f"requires ({n} fields, expected 5).",
+                        "Use exactly: `<key> user <username> password <password>`",
+                    )
+                )
+        elif authkey in keys:
             # Note: {SAS00x}-encoded passwords were previously flagged here as
-            # unusable. That was wrong -- verified against SAS ODA, which
-            # authenticates an encoded password fine. No check.
+            # unusable. That was wrong -- verified against both SAS ODA and an
+            # intranet IOM server, which authenticate them fine.
             out.append(_ok("authinfo_entry", f"Found entry {authkey!r}."))
         else:
             out.append(

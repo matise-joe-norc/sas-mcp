@@ -173,6 +173,30 @@ When anything fails, the report also links
 which covers the IOM, Java, and encryption problems this tool can detect but
 not fix for you.
 
+### If your password "doesn't work"
+
+SASPy parses `~/.authinfo` by requiring a line to split into **exactly five
+whitespace-separated fields**:
+
+```
+<key> user <username> password <password>
+```
+
+A password containing a **space** produces six fields, so SASPy skips the line
+entirely and reports *"did not find key"* — which sends you looking for a
+missing entry rather than a mis-parsed one. Trailing comments break it the
+same way.
+
+Two fixes:
+
+- Use a password with no spaces, or
+- Store a SAS `PWENCODE` value instead — `{SAS004}...` is always a single
+  token, so it sidesteps the problem. These authenticate fine against both
+  ODA and intranet IOM servers. Note it's obfuscation, not encryption: the
+  file still needs `chmod 600`.
+
+`sas-mcp doctor` checks the field count directly and names this cause.
+
 ### SAS encryption jars (needed for ODA)
 
 **SASPy does not ship the SAS encryption jars** — `sas.rutil.jar`,
