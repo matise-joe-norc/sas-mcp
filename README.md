@@ -372,10 +372,11 @@ The SAS 9.4 setups SASPy handles, selected by your `sascfg_personal.py`:
 | Deployment | Access method | Needs | Verified |
 | --- | --- | --- | --- |
 | SAS OnDemand for Academics | IOM | Java, `~/.authinfo` | ✅ macOS + Windows |
+| Intranet SAS server | IOM | Java, `~/.authinfo` | ✅ Windows |
+| Intranet SAS server | SSH | SSH keys | not yet |
 | Local Windows install | COM | pywin32 (no Java) | not yet |
 | Local Windows install | IOM | Java | not yet |
 | Local Linux/UNIX install | STDIO | `saspath` | not yet |
-| Intranet SAS server | IOM or SSH | Java, or SSH keys | not yet |
 
 "Not yet" means generated and unit-tested but not exercised against a running
 SAS — run `sas-mcp check` and it will tell you whether your setup works. If
