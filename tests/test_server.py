@@ -7,6 +7,7 @@ without needing a live SAS deployment.
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +36,19 @@ NOTE: Variable weigth is uninitialized.
 NOTE: The data set WORK.B has 19 observations and 6 variables.
 NOTE: DATA statement used (Total process time):
       real time           0.01 seconds
+"""
+
+
+SYNTAX_ERROR_LOG = """\
+1          data work.a;
+2             set sashelp.nosuchtable;
+3          run;
+
+ERROR: File SASHELP.NOSUCHTABLE.DATA does not exist.
+NOTE: The SAS System stopped processing this step because of errors.
+WARNING: The data set WORK.A may be incomplete.  When this step was stopped there were 0 observations and 0 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
 """
 
 
@@ -226,6 +240,78 @@ def test_doctor_runs_without_a_connection():
     out = call(server, "sas_doctor", probe_network=False)
     assert "verdict" in out
     assert out["counts"]["pass"] >= 1
+
+
+# --- saved log files ---------------------------------------------------------
+
+
+def with_logdir(tmp_path, log=CLEAN_LOG):
+    mgr = SASSessionManager(policy=Policy.from_spec(), log_dir=str(tmp_path))
+    mgr._sas = FakeSAS(log=log)
+    return build_server(manager=mgr), mgr
+
+
+def test_result_carries_an_openable_log_path(tmp_path):
+    """'Check the log' is useless without a location the reader can open."""
+    server, _ = with_logdir(tmp_path)
+    out = call(server, "run_sas", code="data work.a; run;")
+    assert out["log_file"]
+    assert Path(out["log_file"]).is_file()
+
+
+def test_error_result_points_at_the_log_file(tmp_path):
+    server, _ = with_logdir(tmp_path, log=SYNTAX_ERROR_LOG)
+    out = call(server, "run_sas", code="data work.a; set nope; run;")
+    assert out["status"] == "error"
+    assert out["log_file"] in out["next_step"]
+
+
+def test_clean_result_has_no_next_step_noise(tmp_path):
+    server, _ = with_logdir(tmp_path)
+    out = call(server, "run_sas", code="data work.a; run;")
+    assert "next_step" not in out
+
+
+def test_saved_log_contains_findings_and_the_raw_log(tmp_path):
+    server, _ = with_logdir(tmp_path, log=SYNTAX_ERROR_LOG)
+    out = call(server, "run_sas", code="data work.a; set nope; run;")
+    text = Path(out["log_file"]).read_text()
+    assert "SUBMITTED CODE" in text
+    assert "ERRORS (1)" in text
+    assert "does not exist" in text
+    assert "FULL SAS LOG" in text
+    # The explanation of what the finding means travels with it.
+    assert "may be incomplete" in text
+
+
+def test_each_submission_gets_its_own_file(tmp_path):
+    server, _ = with_logdir(tmp_path)
+    a = call(server, "run_sas", code="data work.a; run;")["log_file"]
+    b = call(server, "run_sas", code="data work.b; run;")["log_file"]
+    assert a != b
+    assert len(list(tmp_path.glob("submission-*.log"))) == 2
+
+
+def test_old_logs_are_pruned(tmp_path):
+    server, mgr = with_logdir(tmp_path)
+    mgr.MAX_KEPT_LOGS = 3
+    for i in range(6):
+        call(server, "run_sas", code=f"data work.a{i}; run;")
+    assert len(list(tmp_path.glob("submission-*.log"))) == 3
+
+
+def test_log_saving_failure_does_not_break_the_submit(tmp_path, monkeypatch):
+    """Saving the log is a convenience; a full disk must not fail the run."""
+    server, mgr = with_logdir(tmp_path)
+    monkeypatch.setattr(
+        mgr, "_save_log", lambda *a, **k: (_ for _ in ()).throw(OSError("full"))
+    )
+    with pytest.raises(OSError):
+        mgr._save_log("x", None, "y")
+    # and via the real path, an OSError inside _save_log is swallowed
+    mgr2 = SASSessionManager(log_dir="/nonexistent/cannot/create")
+    mgr2._sas = FakeSAS()
+    assert mgr2.submit("data work.a; run;").log_file is None
 
 
 # --- multiple configurations -------------------------------------------------

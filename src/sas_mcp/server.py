@@ -38,8 +38,10 @@ Working effectively:
 4. Writes are restricted to WORK by default. If a write is blocked, do not try
    to work around it -- report the restriction to the user and let them widen
    the policy.
-5. `run_sas` returns triaged findings, not the whole log. Call `get_last_log`
-   only when the triage is not enough to diagnose a problem.
+5. `run_sas` returns triaged findings, not the whole log. Every result carries
+   `log_file`, a path to the findings plus the complete SAS log -- surface that
+   path to the user when something goes wrong, since they can open it. Call
+   `get_last_log` when you need the log contents inline yourself.
 6. If a tool returns `status: "config_required"`, the user has more than one
    SAS environment configured. The response lists them; call `use_sas_config`
    to pick one. If the user has not indicated which they want, ask -- running
@@ -53,11 +55,12 @@ def build_server(
     manager: SASSessionManager | None = None,
     cfgfile: str | None = None,
     lock_config: bool = False,
+    log_dir: str | None = None,
 ) -> MCPServer:
     """Construct the MCP server and bind its tools to one session manager."""
     mgr = manager or SASSessionManager(
         cfgname=cfgname, policy=policy, cfgfile=cfgfile,
-        lock_config=lock_config,
+        lock_config=lock_config, log_dir=log_dir,
     )
 
     mcp = MCPServer(

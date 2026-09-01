@@ -24,6 +24,14 @@ def _policy_args(p: argparse.ArgumentParser) -> None:
              "selects a configuration (automatically if only one exists).",
     )
     p.add_argument(
+        "--log-dir",
+        default=None,
+        metavar="PATH",
+        help="Directory for saved SAS logs (default: a temporary directory). "
+             "Each submission is written there with its findings and full log, "
+             "and the path is returned with the result.",
+    )
+    p.add_argument(
         "--allow-config-switch",
         action="store_true",
         help="With --config, treat it as a starting point rather than a "
@@ -216,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
 
     build_server(
         cfgname=args.cfgname, policy=policy, cfgfile=args.cfgfile,
-        lock_config=lock_config,
+        lock_config=lock_config, log_dir=args.log_dir,
     ).run(transport="stdio")
     return 0
 

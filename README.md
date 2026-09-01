@@ -326,6 +326,11 @@ Not a log — a verdict:
 `status` is `ok`, `suspicious`, or `error`. **`suspicious` means the code ran
 and the answer is probably wrong** — it is not a success.
 
+Every result also carries `log_file`: a path to a saved file holding the
+findings *and* the complete SAS log, so "check the log" is something you can
+actually act on. Logs go to a temporary directory by default; `--log-dir PATH`
+puts them somewhere you choose, and the 25 most recent are kept.
+
 ## Validating code
 
 Rather than teach an agent a niche SAS test framework, this builds on the tool

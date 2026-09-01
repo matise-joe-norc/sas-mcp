@@ -21,6 +21,7 @@ manual stdout redirect on top of it.
 
 from __future__ import annotations
 
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ class SubmitResult:
     log: str
     syserr: int | None = None
     syserrortext: str = ""
+    log_file: str | None = None
 
     def to_dict(self, include_log: bool = False) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -59,6 +61,17 @@ class SubmitResult:
             "output": self.output,
             "log_line_count": self.triage.log_line_count,
         }
+        if self.log_file:
+            # An openable path matters more than the advice to "check the
+            # log": the raw log is not in this response, and without a
+            # location there is nothing the reader can actually do.
+            d["log_file"] = self.log_file
+            if self.triage.status != "ok":
+                d["next_step"] = (
+                    f"The full annotated log is saved at {self.log_file} -- "
+                    f"open it to see the errors in context. The get_last_log "
+                    f"tool returns the same content inline."
+                )
         if self.syserr is not None:
             d["syserr"] = self.syserr
         if self.syserrortext:
@@ -82,6 +95,7 @@ class SASSessionManager:
         policy: Policy | None = None,
         cfgfile: str | None = None,
         lock_config: bool = False,
+        log_dir: str | None = None,
     ):
         self.cfgname = cfgname
         # When an operator pins a configuration in the MCP client's config,
@@ -98,6 +112,9 @@ class SASSessionManager:
         self._lock = threading.RLock()
         self._last_log = ""
         self._macros_loaded = False
+        self._log_dir_setting = log_dir
+        self._log_dir: Path | None = None
+        self._submit_seq = 0
 
     # --- configuration selection ---------------------------------------------
 
@@ -273,6 +290,68 @@ class SASSessionManager:
         self.check_policy(code)
         return self._submit_unchecked(code, max_events)
 
+    # Keep recent logs available without letting them accumulate forever.
+    MAX_KEPT_LOGS = 25
+
+    @property
+    def log_dir(self) -> Path:
+        """Directory holding saved logs, created on first use."""
+        if self._log_dir is None:
+            if self._log_dir_setting:
+                d = Path(self._log_dir_setting).expanduser()
+                d.mkdir(parents=True, exist_ok=True)
+            else:
+                d = Path(tempfile.mkdtemp(prefix="sas-mcp-logs-"))
+            self._log_dir = d
+        return self._log_dir
+
+    def _save_log(self, code: str, triage: LogTriage, log: str) -> str | None:
+        """Write the findings and the raw log to one openable file."""
+        try:
+            self._submit_seq += 1
+            path = self.log_dir / f"submission-{self._submit_seq:03d}.log"
+
+            head = [
+                f"sas-mcp submission {self._submit_seq}",
+                f"status : {triage.status}",
+                f"summary: {triage.summary}",
+                "=" * 72,
+                "SUBMITTED CODE",
+                "-" * 72,
+                code.strip(),
+            ]
+            for label, events in (
+                ("ERRORS", triage.errors),
+                ("WARNINGS", triage.warnings),
+                ("SUSPICIOUS NOTES", triage.suspicious_notes),
+            ):
+                if not events:
+                    continue
+                head += ["", "=" * 72, f"{label} ({len(events)})", "-" * 72]
+                for e in events:
+                    head.append(f"[log line {e.line_no}] {e.text}")
+                    if e.explanation:
+                        head.append(f"    why: {e.explanation}")
+                    for c in e.context:
+                        head.append(f"    | {c}")
+                    head.append("")
+            head += ["", "=" * 72, "FULL SAS LOG", "-" * 72, ""]
+
+            path.write_text("\n".join(head) + log, errors="replace")
+            self._prune_logs()
+            return str(path)
+        except OSError:
+            # Saving the log is a convenience; never fail a submit over it.
+            return None
+
+    def _prune_logs(self) -> None:
+        try:
+            saved = sorted(self.log_dir.glob("submission-*.log"))
+            for old in saved[: -self.MAX_KEPT_LOGS]:
+                old.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def _submit_unchecked(self, code: str, max_events: int = 25) -> SubmitResult:
         log, listing = self.submit_raw(code)
         triage = parse_log(log, max_events=max_events)
@@ -293,6 +372,7 @@ class SASSessionManager:
             log=log,
             syserr=syserr,
             syserrortext=syserrortext,
+            log_file=self._save_log(code, triage, log),
         )
 
     def ensure_macros(self) -> None:
