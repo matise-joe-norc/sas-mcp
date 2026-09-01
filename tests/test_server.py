@@ -302,17 +302,24 @@ def test_old_logs_are_pruned(tmp_path):
 
 
 def test_log_saving_failure_does_not_break_the_submit(tmp_path, monkeypatch):
-    """Saving the log is a convenience; a full disk must not fail the run."""
+    """Saving the log is a convenience; a full disk must not fail the run.
+
+    The failure is injected rather than provoked with an unwritable path:
+    what counts as unwritable differs by platform (a leading-slash path is
+    creatable on Windows, relative to the current drive).
+    """
+    import sas_mcp.session as sess
+
     server, mgr = with_logdir(tmp_path)
-    monkeypatch.setattr(
-        mgr, "_save_log", lambda *a, **k: (_ for _ in ()).throw(OSError("full"))
-    )
-    with pytest.raises(OSError):
-        mgr._save_log("x", None, "y")
-    # and via the real path, an OSError inside _save_log is swallowed
-    mgr2 = SASSessionManager(log_dir="/nonexistent/cannot/create")
-    mgr2._sas = FakeSAS()
-    assert mgr2.submit("data work.a; run;").log_file is None
+
+    def full_disk(self, *a, **k):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(sess.Path, "write_text", full_disk)
+    out = call(server, "run_sas", code="data work.a; run;")
+
+    assert out["status"] == "ok"       # the SAS submit itself still succeeded
+    assert "log_file" not in out       # and no path is claimed that isn't there
 
 
 # --- multiple configurations -------------------------------------------------
