@@ -226,6 +226,45 @@ def test_other_keys_with_spaces_do_not_trigger_the_check(fake_home):
     assert not any(c.name == "authinfo_format" for c in checks)
 
 
+def test_non_ascii_password_is_flagged(fake_home):
+    """SASPy sends the password UTF-8 encoded to its Java bridge; a charset
+    mismatch there corrupts it with nothing pointing at the password."""
+    p = fake_home / ".authinfo"
+    p.write_text("oda user me password pàssword\n", encoding="utf-8")
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    w = next(c for c in checks if c.name == "authinfo_password_charset")
+    assert w.status == doctor.WARN
+    assert "U+00E0" in w.message
+    assert "pwencode" in w.fix.lower()
+
+
+def test_non_ascii_warning_never_prints_the_password(fake_home):
+    p = fake_home / ".authinfo"
+    p.write_text("oda user me password sûpersecret\n", encoding="utf-8")
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    w = next(c for c in checks if c.name == "authinfo_password_charset")
+    assert "supersecret" not in w.message
+    assert "sûpersecret" not in w.message
+
+
+def test_ascii_password_not_flagged(fake_home):
+    p = fake_home / ".authinfo"
+    p.write_text("oda user me password plainAscii123\n")
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    assert not any(c.name == "authinfo_password_charset" for c in checks)
+
+
+def test_encoded_password_exempt_from_charset_check(fake_home):
+    p = fake_home / ".authinfo"
+    p.write_text("oda user me password {SAS004}ABCDEF\n")
+    p.chmod(0o600)
+    checks = doctor.check_authinfo({"authkey": "oda"})
+    assert not any(c.name == "authinfo_password_charset" for c in checks)
+
+
 def test_sas_encoded_password_is_accepted(fake_home):
     """Verified against live SAS ODA: a {SAS00x} password authenticates fine,
     so it must not be reported as a problem."""

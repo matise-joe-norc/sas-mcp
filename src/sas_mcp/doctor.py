@@ -393,6 +393,7 @@ def check_authinfo(cfg: dict[str, Any]) -> list[Check]:
             # unusable. That was wrong -- verified against both SAS ODA and an
             # intranet IOM server, which authenticate them fine.
             out.append(_ok("authinfo_entry", f"Found entry {authkey!r}."))
+            out.extend(_check_password_transmissible(text, authkey))
         else:
             out.append(
                 _fail(
@@ -403,6 +404,44 @@ def check_authinfo(cfg: dict[str, Any]) -> list[Check]:
                 )
             )
     return out
+
+
+def _check_password_transmissible(text: str, authkey: str) -> list[Check]:
+    """Warn about password characters that may not survive the wire.
+
+    SASPy sends the password to its Java IOM bridge as ``pw.encode()`` -- UTF-8
+    -- over a socket (sasioiom.py). If the Java side decodes with a different
+    charset, which is easy on Windows, a non-ASCII character arrives corrupted
+    and authentication fails with nothing pointing at the password. A PWENCODE
+    {SAS00x} value is pure ASCII and cannot hit this.
+
+    Reports character classes only; never the password itself.
+    """
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 5 or parts[0] != authkey:
+            continue
+        pw = parts[4]
+        if pw.startswith("{SAS0"):
+            return []
+        non_ascii = sorted({c for c in pw if ord(c) > 127})
+        if non_ascii:
+            points = ", ".join(f"U+{ord(c):04X}" for c in non_ascii)
+            return [
+                _warn(
+                    "authinfo_password_charset",
+                    f"The password for {authkey!r} contains non-ASCII "
+                    f"characters ({points}). SASPy sends it UTF-8 encoded to "
+                    f"its Java bridge; if Java decodes with another charset "
+                    f"the password arrives corrupted and authentication fails "
+                    f"without anything pointing at the password.",
+                    "If authentication fails, store a SAS PWENCODE value "
+                    "instead -- `proc pwencode in='yourpassword';` in SAS "
+                    "prints a {SAS00x} string that is pure ASCII.",
+                )
+            ]
+        return []
+    return []
 
 
 def check_iom_hosts(cfg: dict[str, Any], probe: bool = True) -> list[Check]:
