@@ -130,6 +130,13 @@ def main(argv: list[str] | None = None) -> int:
                 init_config.interactive_init(force=args.force, path=path)
         except init_config.ConfigExists as exc:
             print(f"error: {exc}", file=sys.stderr)
+            if "already exists" in str(exc):
+                print(
+                    "Run `sas-mcp init` without --deployment to choose "
+                    "interactively whether to append to it, replace it, or "
+                    "leave it alone. Or pass --force to overwrite.",
+                    file=sys.stderr,
+                )
             return 1
         except (KeyboardInterrupt, EOFError):
             print("\nCancelled.", file=sys.stderr)

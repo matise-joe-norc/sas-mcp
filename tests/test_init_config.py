@@ -149,6 +149,144 @@ def test_written_config_is_owner_only(tmp_path):
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
+# --- merging into an existing config -----------------------------------------
+
+
+def test_parse_config_names_reads_the_list():
+    assert ic.parse_config_names("SAS_config_names = ['oda', 'winlocal']\n") == [
+        "oda", "winlocal",
+    ]
+
+
+def test_parse_config_names_handles_double_quotes_and_spacing():
+    assert ic.parse_config_names('SAS_config_names=["a" ,  "b"]') == ["a", "b"]
+
+
+def test_parse_config_names_returns_none_when_absent():
+    assert ic.parse_config_names("# nothing here\n") is None
+
+
+def test_merge_adds_new_name_and_keeps_the_old_one():
+    existing = ic.build_oda_config("us1", name="oda")
+    generated = ic.build_stdio_config("/opt/sas/sas", name="local")
+    merged = ic.merge_config(existing, generated)
+    ns = load(merged)
+    assert ns["SAS_config_names"] == ["oda", "local"]
+    assert ns["oda"]["iomport"] == 8591
+    assert ns["local"]["saspath"] == "/opt/sas/sas"
+
+
+def test_merge_preserves_hand_written_content():
+    """A user's own comments and edits must survive an append."""
+    existing = (
+        "# my notes about this server\n"
+        "SAS_config_names = ['mine']\n"
+        "mine = {'saspath': '/opt/sas/sas'}  # trailing comment\n"
+    )
+    merged = ic.merge_config(existing, ic.build_oda_config("us1"))
+    assert "# my notes about this server" in merged
+    assert "# trailing comment" in merged
+    ns = load(merged)
+    assert ns["SAS_config_names"] == ["mine", "oda"]
+    assert ns["mine"]["saspath"] == "/opt/sas/sas"
+
+
+def test_merge_refuses_a_duplicate_name():
+    existing = ic.build_oda_config("us1", name="oda")
+    with pytest.raises(ic.ConfigExists, match="already defines"):
+        ic.merge_config(existing, ic.build_oda_config("eu1", name="oda"))
+
+
+def test_merge_refuses_a_file_it_cannot_parse():
+    with pytest.raises(ic.ConfigExists, match="SAS_config_names"):
+        ic.merge_config("total nonsense\n", ic.build_oda_config("us1"))
+
+
+def test_merged_file_is_valid_python_with_three_configs():
+    text = ic.build_oda_config("us1", name="oda")
+    text = ic.merge_config(text, ic.build_stdio_config("/opt/sas", name="a"))
+    text = ic.merge_config(text, ic.build_wincom_config(name="b"))
+    ns = load(text)
+    assert ns["SAS_config_names"] == ["oda", "a", "b"]
+    assert all(isinstance(ns[n], dict) for n in ns["SAS_config_names"])
+
+
+# --- the existing-config prompt ----------------------------------------------
+
+
+def _existing(tmp_path):
+    p = tmp_path / "sascfg_personal.py"
+    p.write_text(ic.build_oda_config("us1", name="oda"))
+    return p
+
+
+def test_keep_leaves_the_file_untouched(tmp_path, monkeypatch):
+    p = _existing(tmp_path)
+    before = p.read_text()
+    monkeypatch.setattr(ic, "_choose", lambda *a, **k: "keep")
+    assert ic.resolve_existing_config(
+        p, ic.build_stdio_config("/opt/sas", name="local"), "local"
+    ) == "kept"
+    assert p.read_text() == before
+
+
+def test_append_adds_the_new_config_and_backs_up(tmp_path, monkeypatch):
+    p = _existing(tmp_path)
+    monkeypatch.setattr(ic, "_choose", lambda *a, **k: "append")
+    assert ic.resolve_existing_config(
+        p, ic.build_stdio_config("/opt/sas", name="local"), "local"
+    ) == "appended"
+    ns = load(p.read_text())
+    assert ns["SAS_config_names"] == ["oda", "local"]
+    assert (tmp_path / "sascfg_personal.py.bak").is_file()
+
+
+def test_replace_overwrites_but_backs_up_first(tmp_path, monkeypatch):
+    p = _existing(tmp_path)
+    monkeypatch.setattr(ic, "_choose", lambda *a, **k: "replace")
+    assert ic.resolve_existing_config(
+        p, ic.build_stdio_config("/opt/sas", name="local"), "local"
+    ) == "replaced"
+    ns = load(p.read_text())
+    assert ns["SAS_config_names"] == ["local"]
+    backup = load((tmp_path / "sascfg_personal.py.bak").read_text())
+    assert backup["SAS_config_names"] == ["oda"]
+
+
+def test_append_with_colliding_name_offers_replace(tmp_path, monkeypatch):
+    p = _existing(tmp_path)
+    monkeypatch.setattr(ic, "_choose", lambda *a, **k: "append")
+    monkeypatch.setattr(ic, "_confirm", lambda *a, **k: True)
+    assert ic.resolve_existing_config(
+        p, ic.build_oda_config("eu1", name="oda"), "oda"
+    ) == "replaced"
+    assert "euw1" in p.read_text()
+
+
+def test_append_with_colliding_name_can_be_cancelled(tmp_path, monkeypatch):
+    p = _existing(tmp_path)
+    before = p.read_text()
+    monkeypatch.setattr(ic, "_choose", lambda *a, **k: "append")
+    monkeypatch.setattr(ic, "_confirm", lambda *a, **k: False)
+    assert ic.resolve_existing_config(
+        p, ic.build_oda_config("eu1", name="oda"), "oda"
+    ) == "cancelled"
+    assert p.read_text() == before
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX permissions")
+def test_backup_is_owner_only(tmp_path, monkeypatch):
+    """The backup can contain the same hostnames and user names as the
+    original, so it must not be left world-readable."""
+    p = _existing(tmp_path)
+    monkeypatch.setattr(ic, "_choose", lambda *a, **k: "append")
+    ic.resolve_existing_config(
+        p, ic.build_stdio_config("/opt/sas", name="local"), "local"
+    )
+    bak = tmp_path / "sascfg_personal.py.bak"
+    assert stat.S_IMODE(bak.stat().st_mode) == 0o600
+
+
 # --- authinfo ----------------------------------------------------------------
 
 

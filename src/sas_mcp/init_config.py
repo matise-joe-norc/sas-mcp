@@ -13,6 +13,7 @@ from the prompting so they can be tested without a terminal.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -340,6 +341,67 @@ class ConfigExists(FileExistsError):
     """Raised rather than silently overwriting an existing config."""
 
 
+_NAMES_RE = re.compile(
+    r"^(?P<indent>[ \t]*)SAS_config_names\s*=\s*\[(?P<body>[^\]]*)\]",
+    re.MULTILINE,
+)
+
+
+def parse_config_names(text: str) -> list[str] | None:
+    """Read SAS_config_names out of a config file.
+
+    Returns None when the declaration cannot be found, so callers can fall
+    back rather than corrupting a file they do not understand.
+    """
+    m = _NAMES_RE.search(text)
+    if not m:
+        return None
+    names = []
+    for raw in m.group("body").split(","):
+        raw = raw.strip().strip("'\"")
+        if raw:
+            names.append(raw)
+    return names
+
+
+def merge_config(existing: str, generated: str) -> str:
+    """Add the generated configuration to an existing file, keeping both.
+
+    The new name is added to SAS_config_names and its dict appended; nothing
+    already in the file is modified.
+    """
+    new_names = parse_config_names(generated) or []
+    if not new_names:  # pragma: no cover - we generate this ourselves
+        raise ConfigExists("Could not read the generated configuration.")
+    new_name = new_names[0]
+
+    current = parse_config_names(existing)
+    if current is None:
+        raise ConfigExists(
+            "Could not find a SAS_config_names list in the existing file, so "
+            "it cannot be merged automatically. Choose replace, or edit the "
+            "file by hand."
+        )
+    if new_name in current:
+        raise ConfigExists(
+            f"The existing file already defines a configuration named "
+            f"{new_name!r}. Choose a different name, or replace the file."
+        )
+
+    # Everything after the SAS_config_names line is the generated dict.
+    m = _NAMES_RE.search(generated)
+    block = generated[m.end():].strip()
+
+    merged_names = current + [new_name]
+    rendered = ", ".join(repr(n) for n in merged_names)
+    updated = _NAMES_RE.sub(
+        lambda mm: f"{mm.group('indent')}SAS_config_names = [{rendered}]",
+        existing,
+        count=1,
+    )
+    return updated.rstrip() + "\n\n" + block + "\n"
+
+
 def write_config(text: str, path: Path | None = None,
                  force: bool = False) -> Path:
     """Write the config, refusing to clobber an existing one unless forced."""
@@ -546,6 +608,61 @@ def _java_or_warn(interactive: bool = True) -> str | None:
     return None
 
 
+def resolve_existing_config(target: Path, text: str, new_name: str) -> str:
+    """Ask what to do about a config file that already exists.
+
+    An existing config is a completely normal situation -- a second SAS
+    deployment, or a re-run of init -- so it is a choice, not an error.
+    Returns "appended", "replaced", "kept", or "cancelled".
+    """
+    existing = target.read_text(errors="replace")
+    current = parse_config_names(existing)
+
+    print(f"\n  A SASPy configuration already exists at:\n    {target}")
+    if current:
+        print(f"  It defines: {', '.join(current)}")
+
+    options = [
+        ("append", f"Add {new_name!r} to it, keeping what is already there"),
+        ("replace", "Replace the whole file with the new configuration"),
+        ("keep", "Leave the file completely unchanged"),
+    ]
+    choice = _choose("What would you like to do?", options)
+
+    if choice == "keep":
+        return "kept"
+
+    if choice == "replace":
+        backup = target.with_suffix(target.suffix + ".bak")
+        backup.write_text(existing)
+        _restrict(backup)
+        print(f"  Previous version saved to {backup}")
+        write_config(text, path=target, force=True)
+        return "replaced"
+
+    # append
+    try:
+        merged = merge_config(existing, text)
+    except ConfigExists as exc:
+        print(f"\n  Cannot merge: {exc}")
+        if _confirm("  Replace the whole file instead?", default=False):
+            backup = target.with_suffix(target.suffix + ".bak")
+            backup.write_text(existing)
+            _restrict(backup)
+            print(f"  Previous version saved to {backup}")
+            write_config(text, path=target, force=True)
+            return "replaced"
+        return "cancelled"
+
+    backup = target.with_suffix(target.suffix + ".bak")
+    backup.write_text(existing)
+    _restrict(backup)
+    target.write_text(merged)
+    _restrict(target)
+    print(f"  Added {new_name!r}; previous version saved to {backup}")
+    return "appended"
+
+
 def interactive_init(force: bool = False,
                      path: Path | None = None) -> dict[str, Any]:
     """Ask what is needed, write the config, and report what was written."""
@@ -603,9 +720,23 @@ def interactive_init(force: bool = False,
         text = build_ssh_config(host, saspath, user or None, name=name)
         result["host"] = host
 
-    target = write_config(text, path=path, force=force)
+    target = (Path(path) if path else default_config_path()).expanduser()
+    action = "written"
+
+    if target.exists() and not force:
+        action = resolve_existing_config(target, text, name)
+        result["existing_config_action"] = action
+        if action == "cancelled":
+            print("\nLeaving the configuration alone.")
+            return result
+    else:
+        write_config(text, path=target, force=True)
+
     result["config_path"] = str(target)
-    print(f"\nWrote {target}")
+    if action == "kept":
+        print(f"\nKept {target} unchanged.")
+    else:
+        print(f"\nWrote {target}")
 
     if needs_java and java is None:
         print(unverified_java_help(target))
