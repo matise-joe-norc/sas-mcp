@@ -393,6 +393,111 @@ def test_saspy_reads_no_environment_variable_for_config(monkeypatch, tmp_path):
     assert path is None  # the env var must be ignored
 
 
+# --- IOM / encryption jars ---------------------------------------------------
+
+
+class FakeSaspyPkg:
+    def __init__(self, pkg_dir):
+        self.__file__ = str(pkg_dir / "sasbase.py")
+
+
+def _make_jar_tree(tmp_path, *, encryption=True, core=True, thirdparty=True):
+    pkg = tmp_path / "saspy"
+    iom = pkg / "java" / "iomclient"
+    tp = pkg / "java" / "thirdparty"
+    iom.mkdir(parents=True)
+    tp.mkdir(parents=True)
+    if core:
+        for j in doctor._IOMCLIENT_JARS:
+            (iom / j).write_text("jar")
+    if encryption:
+        for j in doctor._ENCRYPTION_JARS:
+            (iom / j).write_text("jar")
+    if thirdparty:
+        for j in doctor._THIRDPARTY_JARS:
+            (tp / j).write_text("jar")
+    return FakeSaspyPkg(pkg), iom
+
+
+def test_complete_jar_set_passes(tmp_path):
+    mod, _ = _make_jar_tree(tmp_path)
+    checks = doctor.check_iom_jars(mod)
+    assert [c.status for c in checks] == [doctor.PASS]
+
+
+def test_missing_encryption_jars_reported_with_download_and_destination(tmp_path):
+    """SAS ODA requires an encrypted connection, so a missing encryption jar
+    fails a connection that is otherwise configured perfectly."""
+    mod, iom = _make_jar_tree(tmp_path, encryption=False)
+    checks = doctor.check_iom_jars(mod)
+    enc = next(c for c in checks if c.name == "encryption_jars")
+    assert enc.status == doctor.FAIL
+    assert "sas.rutil.jar" in enc.message
+    assert doctor.ENCRYPTION_JAR_DOWNLOAD in enc.fix
+    # The destination folder must be spelled out, not described.
+    assert str(iom) in enc.fix
+
+
+def test_partially_missing_encryption_jars_still_flagged(tmp_path):
+    mod, iom = _make_jar_tree(tmp_path)
+    (iom / "sastpj.rutil.jar").unlink()
+    checks = doctor.check_iom_jars(mod)
+    enc = next(c for c in checks if c.name == "encryption_jars")
+    assert "sastpj.rutil.jar" in enc.message
+    assert "sas.rutil.jar," not in enc.message  # only the missing one
+
+
+def test_missing_core_jars_suggest_reinstall(tmp_path):
+    mod, _ = _make_jar_tree(tmp_path, core=False)
+    checks = doctor.check_iom_jars(mod)
+    core = next(c for c in checks if c.name == "iom_jars")
+    assert "force-reinstall" in core.fix
+
+
+def test_missing_thirdparty_jars_reported(tmp_path):
+    mod, _ = _make_jar_tree(tmp_path, thirdparty=False)
+    checks = doctor.check_iom_jars(mod)
+    assert any(c.name == "iom_thirdparty_jars" for c in checks)
+
+
+def test_jar_check_skipped_when_no_java_dir(tmp_path):
+    """Not every SASPy layout has a java directory; absence is not a failure."""
+    pkg = tmp_path / "saspy"
+    pkg.mkdir()
+    assert doctor.check_iom_jars(FakeSaspyPkg(pkg)) == []
+
+
+# --- help links --------------------------------------------------------------
+
+
+def test_report_includes_help_links_when_something_is_wrong():
+    report = doctor.run_diagnostics(probe_network=False)
+    if report["counts"]["fail"] or report["counts"]["warn"]:
+        assert report["help"]["troubleshooting"] == doctor.SASPY_TROUBLESHOOTING
+
+
+def test_clean_report_omits_help_links():
+    report = {
+        "verdict": "All checks passed.", "config_name": None,
+        "counts": {"pass": 3, "warn": 0, "fail": 0}, "checks": [],
+    }
+    assert "Still stuck" not in doctor.format_report(report)
+
+
+def test_format_report_shows_troubleshooting_url_on_failure():
+    report = {
+        "verdict": "Blocked", "config_name": None,
+        "counts": {"pass": 0, "warn": 0, "fail": 1},
+        "checks": [{"name": "java", "status": "fail", "message": "no JRE",
+                    "fix": "install it"}],
+        "help": {"troubleshooting": doctor.SASPY_TROUBLESHOOTING,
+                 "configuration": doctor.SASPY_CONFIGURATION},
+    }
+    text = doctor.format_report(report)
+    assert doctor.SASPY_TROUBLESHOOTING in text
+    assert "Still stuck" in text
+
+
 # --- report ------------------------------------------------------------------
 
 

@@ -142,6 +142,26 @@ network reachability, and encoding. Every failure comes with the fix.
          fix: chmod 600 ~/.authinfo
 ```
 
+When anything fails, the report also links
+[SASPy's troubleshooting guide](https://sassoftware.github.io/saspy/troubleshooting.html),
+which covers the IOM, Java, and encryption problems this tool can detect but
+not fix for you.
+
+### If SAS ODA fails with a Java or encryption error
+
+SAS ODA requires an encrypted connection, which needs three SAS encryption
+jars: `sas.rutil.jar`, `sas.rutil.nls.jar`, and `sastpj.rutil.jar`. Current
+SASPy bundles them, but older versions did not, and a partial install shows up
+as a Java stack trace at connect time rather than anything mentioning files.
+
+`sas-mcp doctor` checks for them directly. If they're missing it names the
+three files, links the
+[SAS download](https://sassoftware.github.io/saspy/configuration.html#attn-as-of-saspy-version-3-3-3-the-classpath-is-no-longer-required),
+and prints the exact folder to copy them into — SASPy's own
+`saspy/java/iomclient/`, since that is the path SASPy hardcodes when it builds
+the IOM classpath. They have to go there specifically; another directory won't
+be found.
+
 ## Connect your agent
 
 **Claude Code**

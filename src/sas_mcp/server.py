@@ -71,6 +71,11 @@ def build_server(
             "error": str(exc),
             "next_step": "Run the sas_doctor tool; it reports configuration, "
                          "Java, credential, and network problems with fixes.",
+            "troubleshooting": (
+                "If sas_doctor does not resolve it, point the user at SASPy's "
+                "troubleshooting guide: "
+                "https://sassoftware.github.io/saspy/troubleshooting.html"
+            ),
         }
 
     # --- diagnostics ---------------------------------------------------------
