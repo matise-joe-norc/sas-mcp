@@ -101,10 +101,23 @@ _WRITE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("sql_insert", re.compile(rf"(?i)\binsert\s+into\s+{_TWO_LEVEL}")),
     ("sql_update", re.compile(rf"(?i)\bupdate\s+{_TWO_LEVEL}")),
     ("sql_delete_from", re.compile(rf"(?i)\bdelete\s+from\s+{_TWO_LEVEL}")),
-    ("proc_append", re.compile(rf"(?i)\b(?:base|data)\s*=\s*{_TWO_LEVEL}")),
+    # PROC APPEND writes to BASE=. Its DATA= is the *source* -- a read, like
+    # DATA= everywhere else in SAS.
+    ("proc_append", re.compile(rf"(?i)\bbase\s*=\s*{_TWO_LEVEL}")),
     ("out_option", re.compile(rf"(?i)\bout\s*=\s*{_TWO_LEVEL}")),
-    ("outfile_lib", re.compile(rf"(?i)\bdatasets\s+(?:lib|library)\s*=\s*([A-Za-z_]\w{{0,7}})\b")),
 )
+
+# PROC DATASETS statements that modify a library, as opposed to reporting on
+# it. CONTENTS and a bare PROC DATASETS are read-only.
+_DATASETS_MUTATORS = re.compile(
+    r"(?i)(?:^|;)\s*(?:delete|kill|modify|rename|change|append|save|age|"
+    r"exchange|copy|move)\b"
+)
+_PROC_DATASETS = re.compile(
+    r"(?i)\bproc\s+datasets\b(?P<opts>[^;]*);(?P<body>.*?)(?:\bquit\b|\Z)",
+    re.DOTALL,
+)
+_DATASETS_LIB = re.compile(r"(?i)\b(?:lib|library|ddname)\s*=\s*([A-Za-z_]\w{0,7})\b")
 
 
 @dataclass
@@ -264,9 +277,6 @@ def _check_write_targets(scan: str, policy: Policy) -> list[Violation]:
             if kind == "data_step":
                 targets = _split_data_targets(m.group("targets"))
                 base = m.start("targets")
-            elif kind == "outfile_lib":
-                targets = [(m.group(1).upper(), "*")]
-                base = m.start(1)
             else:
                 targets = [(m.group(1).upper(), m.group(2).upper())]
                 base = m.start(1)
@@ -292,4 +302,41 @@ def _check_write_targets(scan: str, policy: Policy) -> list[Violation]:
                         ),
                     )
                 )
+
+    found.extend(_check_proc_datasets(scan, policy))
+    return found
+
+
+def _check_proc_datasets(scan: str, policy: Policy) -> list[Violation]:
+    """Flag PROC DATASETS only when it actually modifies the library.
+
+    `proc datasets lib=sashelp; contents data=class; quit;` is a report, not a
+    write, and blocking it would make ordinary exploration fail.
+    """
+    found: list[Violation] = []
+    for m in _PROC_DATASETS.finditer(scan):
+        lib_match = _DATASETS_LIB.search(m.group("opts"))
+        if not lib_match:
+            continue
+        lib = lib_match.group(1).upper()
+        if lib in policy.writable_libs:
+            continue
+        body = m.group("body")
+        mutator = _DATASETS_MUTATORS.search(body)
+        if not mutator:
+            continue
+        verb = mutator.group(0).strip("; \n\t").upper()
+        found.append(
+            Violation(
+                rule="write_outside_allowlist",
+                category="write",
+                line_no=_line_of(scan, lib_match.start(1) + m.start("opts")),
+                matched=f"{lib} ({verb})",
+                message=(
+                    f"PROC DATASETS {verb} modifies library {lib}, which is "
+                    f"not in the writable allowlist "
+                    f"({', '.join(sorted(policy.writable_libs))})."
+                ),
+            )
+        )
     return found

@@ -208,3 +208,89 @@ def test_libname_clear_is_not_rebinding():
 def test_libname_for_readonly_lib_is_not_rebinding():
     """Assigning a libref the policy never made writable is not itself a write."""
     assert check("libname arch '/archive';", DEFAULT).allowed
+
+
+# --- DATA= is a read, not a write --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "proc freq data=sashelp.prdsale; tables country; run;",
+        "proc means data=sashelp.class; run;",
+        "proc print data=prod.sales(obs=10); run;",
+        "proc contents data=sashelp.cars; run;",
+        "proc univariate data=prod.x; var y; run;",
+        "proc summary data=prod.sales nway; run;",
+    ],
+)
+def test_proc_data_option_is_a_read(code):
+    """DATA= names the input. Treating it as a write blocked every ordinary
+    PROC against any library outside WORK -- including SASHELP."""
+    assert check(code, DEFAULT).allowed, code
+
+
+def test_proc_sort_reading_one_lib_and_writing_work_is_allowed():
+    assert check(
+        "proc sort data=prod.sales out=work.sorted; by id; run;", DEFAULT
+    ).allowed
+
+
+def test_proc_sort_out_to_protected_lib_still_blocked():
+    r = check("proc sort data=work.a out=prod.sorted; by id; run;", DEFAULT)
+    assert [v.matched for v in r.violations] == ["PROD.SORTED"]
+
+
+def test_proc_append_base_is_the_write_target():
+    """In PROC APPEND, BASE= is written and DATA= is only read."""
+    r = check("proc append base=prod.master data=work.new; run;", DEFAULT)
+    assert [v.matched for v in r.violations] == ["PROD.MASTER"]
+
+
+def test_proc_append_reading_protected_lib_into_work_is_allowed():
+    assert check("proc append base=work.a data=prod.b; run;", DEFAULT).allowed
+
+
+# --- PROC DATASETS: report vs. modify ----------------------------------------
+
+
+def test_proc_datasets_contents_is_read_only():
+    assert check(
+        "proc datasets lib=sashelp; contents data=class; quit;", DEFAULT
+    ).allowed
+
+
+def test_bare_proc_datasets_listing_is_read_only():
+    assert check("proc datasets lib=prod nolist; quit;", DEFAULT).allowed
+
+
+@pytest.mark.parametrize("verb", ["delete sales", "modify sales", "rename a=b",
+                                  "change x=y", "append data=work.a", "age a b"])
+def test_proc_datasets_mutations_are_blocked(verb):
+    code = f"proc datasets lib=prod nolist; {verb}; quit;"
+    r = check(code, DEFAULT)
+    assert not r.allowed, code
+    assert any(v.rule == "write_outside_allowlist" for v in r.violations)
+
+
+def test_proc_datasets_mutation_names_the_verb():
+    r = check("proc datasets lib=prod; modify sales; quit;", DEFAULT)
+    v = next(x for x in r.violations if x.rule == "write_outside_allowlist")
+    assert "MODIFY" in v.matched
+
+
+def test_proc_datasets_mutation_allowed_in_writable_lib():
+    p = Policy.from_spec(writable_libs="PROD")
+    assert check("proc datasets lib=prod; modify sales; quit;", p).allowed
+
+
+def test_delete_needs_destructive_opt_in_even_in_a_writable_lib():
+    """Deleting data is gated separately from writing it: an allowlisted
+    library still does not authorise DELETE."""
+    p = Policy.from_spec(writable_libs="PROD")
+    r = check("proc datasets lib=prod; delete old; quit;", p)
+    assert not r.allowed
+    assert {v.rule for v in r.violations} == {"datasets_delete"}
+
+    p2 = Policy.from_spec(writable_libs="PROD", allow_destructive=True)
+    assert check("proc datasets lib=prod; delete old; quit;", p2).allowed
