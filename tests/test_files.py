@@ -197,3 +197,61 @@ def test_transfer_directory_is_created_on_demand(tmp_path):
     target = tmp_path / "nested" / "transfers"
     mgr = SASSessionManager(file_dir=str(target))
     assert mgr.file_dir.is_dir()
+
+
+# --- where output lands ------------------------------------------------------
+
+
+def test_defaults_to_the_working_directory(tmp_path, monkeypatch):
+    """A temporary directory is invisible to the user; the working folder
+    shows up in the editor's file tree."""
+    monkeypatch.chdir(tmp_path)
+    mgr = SASSessionManager()
+    assert mgr.file_dir == tmp_path / "sas-mcp" / "files"
+    assert mgr.log_dir == tmp_path / "sas-mcp" / "logs"
+
+
+def test_output_directory_is_git_ignored(tmp_path, monkeypatch):
+    """It appears inside whatever project the editor has open, and SAS output
+    can contain real data."""
+    monkeypatch.chdir(tmp_path)
+    SASSessionManager().file_dir
+    gitignore = tmp_path / "sas-mcp" / ".gitignore"
+    assert gitignore.is_file()
+    assert "*" in gitignore.read_text()
+
+
+def test_existing_gitignore_is_not_overwritten(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    base = tmp_path / "sas-mcp"
+    base.mkdir()
+    (base / ".gitignore").write_text("# mine\n")
+    SASSessionManager().file_dir
+    assert (base / ".gitignore").read_text() == "# mine\n"
+
+
+def test_explicit_setting_wins_over_the_working_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    chosen = tmp_path / "elsewhere"
+    mgr = SASSessionManager(file_dir=str(chosen))
+    assert mgr.file_dir == chosen
+
+
+def test_falls_back_to_temp_when_cwd_is_unwritable(monkeypatch, tmp_path):
+    """Some clients start the server somewhere it cannot write, such as /."""
+    import sas_mcp.session as sess
+
+    def refuse(self, *a, **k):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(sess.Path, "mkdir", refuse)
+    d = sess.resolve_output_dir(None, "files")
+    assert d.is_dir()
+    assert "sas-mcp-files-" in d.name
+
+
+def test_logs_and_files_are_separate_directories(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    mgr = SASSessionManager()
+    assert mgr.log_dir != mgr.file_dir
+    assert mgr.log_dir.parent == mgr.file_dir.parent

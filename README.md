@@ -387,11 +387,22 @@ download_from_sas: ~/report.xlsx -> /tmp/sas-mcp-files-xxxx/report.xlsx
 
 `upload_to_sas` goes the other way, for sending a CSV or workbook in.
 
-Transfers are confined to one directory (`--file-dir PATH`, temporary by
-default). Downloads land there and uploads may only read from there, so the
-agent can neither overwrite arbitrary local files nor send arbitrary local
-files to a remote server. To upload something else, copy it into that
-directory first.
+Everything the server writes for you lands in your working folder, so it
+shows up in the editor's file tree:
+
+```
+sas-mcp/
+  .gitignore        excludes this directory automatically
+  files/            downloads land here; uploads may only read from here
+  logs/             one annotated log per submission
+```
+
+Override with `--file-dir PATH` and `--log-dir PATH`. If the client starts
+the server somewhere unwritable, both fall back to a temporary directory.
+
+Transfers are confined to that one directory, so the agent can neither
+overwrite arbitrary local files nor send arbitrary local files to a remote
+server. To upload something else, copy it in first.
 
 ## Safety
 

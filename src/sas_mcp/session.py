@@ -31,6 +31,46 @@ from .guards import GuardResult, Policy, check
 from .logparse import LogTriage, parse_log
 
 
+# Everything the server writes for the user goes under one directory in the
+# working folder, so it shows up in the editor's file tree instead of a
+# temporary path nobody thinks to look in.
+OUTPUT_DIR_NAME = "sas-mcp"
+
+# Written inside that directory on creation. SAS output can contain real data,
+# and the directory appears inside whatever project the editor opened, so it
+# should not become a commit by accident.
+_GITIGNORE = (
+    "# Created by sas-mcp. SAS logs and downloaded files can contain real\n"
+    "# data, so this directory is excluded from version control by default.\n"
+    "*\n"
+)
+
+
+def resolve_output_dir(setting: str | None, subdir: str) -> Path:
+    """Pick a directory for server output, preferring somewhere visible.
+
+    Order: an explicit setting, then ``./sas-mcp/<subdir>`` in the working
+    directory, then a temporary directory. The middle case is what makes
+    downloads and logs discoverable in an editor; the last is the fallback for
+    clients that start the server somewhere unwritable, such as ``/``.
+    """
+    if setting:
+        d = Path(setting).expanduser()
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    try:
+        base = Path.cwd() / OUTPUT_DIR_NAME
+        target = base / subdir
+        target.mkdir(parents=True, exist_ok=True)
+        gitignore = base / ".gitignore"
+        if not gitignore.exists():
+            gitignore.write_text(_GITIGNORE)
+        return target
+    except OSError:
+        return Path(tempfile.mkdtemp(prefix=f"sas-mcp-{subdir}-"))
+
+
 class SASConnectionError(RuntimeError):
     """Raised when a SAS session cannot be established."""
 
@@ -300,12 +340,7 @@ class SASSessionManager:
     def log_dir(self) -> Path:
         """Directory holding saved logs, created on first use."""
         if self._log_dir is None:
-            if self._log_dir_setting:
-                d = Path(self._log_dir_setting).expanduser()
-                d.mkdir(parents=True, exist_ok=True)
-            else:
-                d = Path(tempfile.mkdtemp(prefix="sas-mcp-logs-"))
-            self._log_dir = d
+            self._log_dir = resolve_output_dir(self._log_dir_setting, "logs")
         return self._log_dir
 
     @property
@@ -316,12 +351,7 @@ class SASSessionManager:
         downloads land here, and uploads may only read from here.
         """
         if self._file_dir is None:
-            if self._file_dir_setting:
-                d = Path(self._file_dir_setting).expanduser()
-            else:
-                d = Path(tempfile.mkdtemp(prefix="sas-mcp-files-"))
-            d.mkdir(parents=True, exist_ok=True)
-            self._file_dir = d
+            self._file_dir = resolve_output_dir(self._file_dir_setting, "files")
         return self._file_dir
 
     def _save_log(self, code: str, triage: LogTriage, log: str) -> str | None:
@@ -422,6 +452,8 @@ class SASSessionManager:
             "connected": True,
             "cfgname": self.cfgname,
             "policy": self._policy_dict(),
+            "log_directory": str(self.log_dir),
+            "transfer_directory": str(self.file_dir),
         }
         try:
             info["sas_version"] = sas.sasver if hasattr(sas, "sasver") else None

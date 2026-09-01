@@ -27,17 +27,17 @@ def _policy_args(p: argparse.ArgumentParser) -> None:
         "--log-dir",
         default=None,
         metavar="PATH",
-        help="Directory for saved SAS logs (default: a temporary directory). "
-             "Each submission is written there with its findings and full log, "
-             "and the path is returned with the result.",
+        help="Directory for saved SAS logs (default: ./sas-mcp/logs in the "
+             "working directory). Each submission is written there with its "
+             "findings and full log, and the path is returned with the result.",
     )
     p.add_argument(
         "--file-dir",
         default=None,
         metavar="PATH",
         help="Directory used to transfer files to and from the SAS server "
-             "(default: a temporary directory). Downloads land here, and "
-             "uploads may only read from here.",
+             "(default: ./sas-mcp/files in the working directory). Downloads "
+             "land here, and uploads may only read from here.",
     )
     p.add_argument(
         "--allow-config-switch",
