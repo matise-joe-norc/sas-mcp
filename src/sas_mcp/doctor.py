@@ -246,13 +246,20 @@ def check_java(cfg: dict[str, Any]) -> list[Check]:
     exe = configured or shutil.which("java")
 
     if not exe:
+        hint = (
+            "On Windows, SAS ships one at C:\\Program Files\\SASHome\\"
+            "SASPrivateJavaRuntimeEnvironment\\9.4\\jre\\bin\\java.exe. "
+            if sys.platform.startswith("win")
+            else "Install a JRE (e.g. `brew install --cask temurin` on macOS, "
+                 "or your platform's OpenJDK). "
+        )
         return [
             _fail(
                 "java",
                 "No Java runtime found, and IOM requires one.",
-                "Install a JRE (e.g. `brew install --cask temurin` on macOS, or "
-                "your platform's OpenJDK), then set 'java' in the config to its "
-                "full path.",
+                hint + "Then re-run `sas-mcp init --java <path>`, or set the "
+                       "'java' entry in the config file named above to its "
+                       "full path.",
             )
         ]
 

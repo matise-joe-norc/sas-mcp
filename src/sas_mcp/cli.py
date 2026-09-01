@@ -88,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ini.add_argument("--name", default=None, metavar="NAME",
                      help="Configuration name (default: oda, or sasconfig).")
+    ini.add_argument(
+        "--java", default=None, metavar="PATH",
+        help="Path to the java executable, or a JAVA_HOME/JDK folder. "
+             "Skips autodetection. Accepts a Windows path with backslashes; "
+             "it is written to the config as a raw string.",
+    )
 
     doc = sub.add_parser("doctor", help="Diagnose SASPy configuration and exit.")
     doc.add_argument("--config", dest="cfgname", default=None, metavar="NAME")
@@ -108,11 +114,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.deployment == "oda" and args.region:
                 # Fully non-interactive: scriptable for team setup.
                 name = args.name or "oda"
+                java = init_config.resolve_java_arg(args.java)
                 text = init_config.build_oda_config(
-                    args.region, name=name, java=init_config.detect_java()
+                    args.region, name=name, java=java
                 )
                 target = init_config.write_config(text, path, force=args.force)
                 print(f"Wrote {target}")
+                if java is None:
+                    print(init_config.unverified_java_help(target))
                 print("Add your credentials to "
                       f"{init_config.authinfo_path()} as:\n"
                       f"  {name} user YOUR_USER password YOUR_PASSWORD")

@@ -88,26 +88,123 @@ def _java_runs(exe: str) -> bool:
     )
 
 
+def _java_exe_names() -> tuple[str, ...]:
+    return ("java.exe",) if sys.platform.startswith("win") else ("java",)
+
+
+def java_from_dir(path: Path) -> Path | None:
+    """Accept a JAVA_HOME, a JDK folder, or the executable itself.
+
+    People reasonably paste any of the three, so resolve all of them rather
+    than rejecting two out of three.
+    """
+    if path.is_file():
+        return path
+    for name in _java_exe_names():
+        for cand in (path / name, path / "bin" / name,
+                     path / "jre" / "bin" / name):
+            if cand.is_file():
+                return cand
+    return None
+
+
+JDK_VENDOR_DIRS = ("Java", "Eclipse Adoptium", "Amazon Corretto", "Zulu",
+                   "Microsoft", "AdoptOpenJDK", "OpenJDK", "JetBrains")
+
+
+def _windows_candidates(
+    sas_homes: list[Path] | None = None,
+    program_files: list[Path] | None = None,
+    exe: str = "java.exe",
+) -> list[str]:
+    """Java locations to try on Windows, best guess first.
+
+    Arguments exist so the search can be tested against a fixture tree on any
+    platform; production calls use the real locations.
+    """
+    out: list[str] = []
+
+    if sas_homes is None:
+        sas_homes = [Path(r"C:\Program Files\SASHome"),
+                     Path(r"C:\Program Files (x86)\SASHome")]
+        if env_home := os.environ.get("SASHOME"):
+            sas_homes.insert(0, Path(env_home))
+
+    # SAS 9.4 for Windows ships a private JRE. Anyone running local Windows
+    # SAS already has this one, so it is the highest-yield guess and goes
+    # first -- it turns "install Java" into no work at all.
+    for home in sas_homes:
+        for jre in sorted(
+            home.glob(f"SASPrivateJavaRuntimeEnvironment/*/jre/bin/{exe}"),
+            reverse=True,
+        ):
+            out.append(str(jre))
+
+    if program_files is None:
+        program_files = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
+        ]
+
+    for pf in program_files:
+        for vendor in JDK_VENDOR_DIRS:
+            base = pf / vendor
+            if not base.is_dir():
+                continue
+            for jdk in sorted(base.glob("*"), reverse=True):
+                for cand in (jdk / "bin" / exe, jdk / "jre" / "bin" / exe):
+                    if cand.is_file():
+                        out.append(str(cand))
+    return out
+
+
+def _darwin_candidates() -> list[str]:
+    out: list[str] = []
+    # Homebrew and manual installs often are not registered with
+    # /usr/libexec/java_home even though they run fine.
+    try:
+        p = subprocess.run(["/usr/libexec/java_home"], capture_output=True,
+                           text=True, timeout=20)
+        if p.returncode == 0 and p.stdout.strip():
+            out.append(str(Path(p.stdout.strip()) / "bin" / "java"))
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    for base in sorted(Path("/Library/Java/JavaVirtualMachines").glob("*"),
+                       reverse=True):
+        out.append(str(base / "Contents" / "Home" / "bin" / "java"))
+    out += ["/opt/homebrew/opt/openjdk/bin/java",
+            "/usr/local/opt/openjdk/bin/java"]
+    return out
+
+
+def _linux_candidates() -> list[str]:
+    out: list[str] = []
+    for base in sorted(Path("/usr/lib/jvm").glob("*"), reverse=True):
+        for cand in (base / "bin" / "java", base / "jre" / "bin" / "java"):
+            if cand.is_file():
+                out.append(str(cand))
+    return out
+
+
 def detect_java() -> str | None:
-    """Find a Java executable that actually works, or None."""
+    """Find a Java executable that actually works, or None.
+
+    Checks JAVA_HOME and the platform's usual install locations, not just
+    PATH -- a JRE is very often installed without being on PATH, especially
+    on Windows.
+    """
     candidates: list[str] = []
 
-    if sys.platform == "darwin":
-        # Homebrew and manual installs often are not registered with
-        # /usr/libexec/java_home even though they run fine.
-        try:
-            p = subprocess.run(["/usr/libexec/java_home"], capture_output=True,
-                               text=True, timeout=20)
-            if p.returncode == 0 and p.stdout.strip():
-                candidates.append(str(Path(p.stdout.strip()) / "bin" / "java"))
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        for base in sorted(Path("/Library/Java/JavaVirtualMachines").glob("*"),
-                           reverse=True):
-            candidates.append(str(base / "Contents" / "Home" / "bin" / "java"))
-        for base in ("/opt/homebrew/opt/openjdk/bin/java",
-                     "/usr/local/opt/openjdk/bin/java"):
-            candidates.append(base)
+    if home := os.environ.get("JAVA_HOME"):
+        if found := java_from_dir(Path(home)):
+            candidates.append(str(found))
+
+    if sys.platform.startswith("win"):
+        candidates += _windows_candidates()
+    elif sys.platform == "darwin":
+        candidates += _darwin_candidates()
+    else:
+        candidates += _linux_candidates()
 
     if which := shutil.which("java"):
         candidates.append(which)
@@ -131,10 +228,26 @@ SAS_config_names = [{names}]
 """
 
 
+def _render_value(v: Any) -> str:
+    """Render a config value as readable Python source.
+
+    Windows paths are emitted as raw strings: repr() would double every
+    backslash, which is valid but looks wrong to anyone opening the file to
+    edit it -- and this file exists to be edited.
+    """
+    if isinstance(v, str):
+        if "\\" in v and not v.endswith("\\") and "'" not in v:
+            return f"r'{v}'"
+        return repr(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_render_value(i) for i in v) + "]"
+    return repr(v)
+
+
 def _render_dict(name: str, entries: dict[str, Any]) -> str:
     lines = [f"{name} = {{"]
     for k, v in entries.items():
-        lines.append(f"    {k!r}: {v!r},")
+        lines.append(f"    {k!r}: {_render_value(v)},")
     lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -335,16 +448,100 @@ def _confirm(prompt: str, default: bool = True) -> bool:
     return raw.startswith("y")
 
 
-def _java_or_warn() -> str | None:
+_INSTALL_HINT = {
+    "darwin": "brew install --cask temurin",
+    "win32": "download Temurin from https://adoptium.net",
+}.get(sys.platform, "install your distribution's OpenJDK package")
+
+
+def prompt_for_java(ask=input) -> str | None:
+    """Ask for a Java path and verify it before accepting it.
+
+    Accepts the executable, a JAVA_HOME, or a JDK folder, and tolerates the
+    surrounding quotes Windows' "Copy as path" adds.
+    """
+    print(
+        "\n  No working Java runtime was found automatically.\n"
+        "  If Java is installed, enter its path now (the java executable, or\n"
+        "  the JDK/JAVA_HOME folder). On Windows, SAS ships one at:\n"
+        r"    C:\Program Files\SASHome\SASPrivateJavaRuntimeEnvironment\9.4\jre\bin\java.exe"
+    )
+    for _ in range(3):
+        raw = ask("  Java path (blank to skip): ").strip().strip('"').strip("'")
+        if not raw:
+            return None
+        found = java_from_dir(Path(raw).expanduser())
+        if found is None:
+            print(f"    Not found: {raw}")
+            continue
+        if not _java_runs(str(found)):
+            print(f"    {found} exists but did not run as a Java runtime.")
+            continue
+        print(f"    Verified: {found}")
+        return str(found)
+    return None
+
+
+def resolve_java_arg(supplied: str | None) -> str | None:
+    """Resolve an explicitly supplied --java value, else autodetect.
+
+    A path the user names is verified rather than trusted: a wrong path
+    written into the config fails later with a far less obvious message.
+    """
+    if supplied:
+        found = java_from_dir(Path(supplied.strip().strip('"').strip("'"))
+                              .expanduser())
+        if found is None:
+            # Quoted plainly, not repr'd: a Windows path shown with doubled
+            # backslashes reads like the path itself is wrong.
+            raise ConfigExists(  # surfaced as a CLI error
+                f'No java executable found at "{supplied}". Give the path to '
+                f"java{'.exe' if sys.platform.startswith('win') else ''}, or "
+                f"to a JAVA_HOME/JDK folder."
+            )
+        if not _java_runs(str(found)):
+            raise ConfigExists(
+                f"{found} exists but did not run as a Java runtime."
+            )
+        return str(found)
+    return detect_java()
+
+
+def unverified_java_help(config_path: Path) -> str:
+    """Exact file and line to edit when Java could not be verified."""
+    if sys.platform.startswith("win"):
+        example = (
+            r"    'java': r'C:\Program Files\SASHome"
+            r"\SASPrivateJavaRuntimeEnvironment\9.4\jre\bin\java.exe',"
+        )
+        exe = "java.exe"
+    else:
+        example = "    'java': '/usr/lib/jvm/temurin-17/bin/java',"
+        exe = "java"
+    return (
+        f"\n  Java was not verified, so the config says just 'java'.\n"
+        f"  If SAS cannot start, edit this file:\n"
+        f"    {config_path}\n"
+        f"  and set the 'java' entry to the full path of {exe}:\n"
+        f"{example}\n"
+        f"  Note the leading r, which keeps Windows backslashes literal.\n"
+        f"  Then re-run `sas-mcp doctor`."
+    )
+
+
+def _java_or_warn(interactive: bool = True) -> str | None:
     java = detect_java()
     if java:
         print(f"  Found a working Java runtime: {java}")
         return java
+    if interactive:
+        if java := prompt_for_java():
+            return java
     print(
-        "  WARNING: no working Java runtime found, and this connection type\n"
-        "  needs one. The config will say 'java', which works only if a JRE is\n"
-        "  on your PATH. Install one (macOS: brew install --cask temurin) and\n"
-        "  set the 'java' entry to its full path."
+        f"  WARNING: continuing without a verified Java runtime. The config\n"
+        f"  will say 'java', which works only if a JRE is on your PATH.\n"
+        f"  To fix later, {_INSTALL_HINT}, then set the 'java' entry in the\n"
+        f"  config file this command writes (the path is printed below)."
     )
     return None
 
@@ -359,6 +556,8 @@ def interactive_init(force: bool = False,
         "Name for this configuration", "sasconfig"
     )
     result: dict[str, Any] = {"deployment": kind, "config_name": name}
+    java: str | None = None
+    needs_java = kind in {"oda", "iom", "winlocal"}
 
     if kind == "oda":
         region = _choose(
@@ -407,6 +606,9 @@ def interactive_init(force: bool = False,
     target = write_config(text, path=path, force=force)
     result["config_path"] = str(target)
     print(f"\nWrote {target}")
+
+    if needs_java and java is None:
+        print(unverified_java_help(target))
 
     # Credentials, for the connection types that authenticate.
     if kind in {"oda", "iom"}:

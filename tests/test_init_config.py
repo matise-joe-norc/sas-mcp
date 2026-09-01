@@ -227,6 +227,165 @@ def test_authinfo_filename_matches_platform():
     assert ic.authinfo_path().name == expected
 
 
+# --- Windows path rendering --------------------------------------------------
+
+
+def test_windows_java_path_rendered_as_raw_string():
+    """repr() would double every backslash -- valid, but wrong-looking in a
+    file whose whole purpose is to be hand-edited."""
+    text = ic.build_oda_config(
+        "us1", java=r"C:\Program Files\SASHome\jre\bin\java.exe"
+    )
+    assert r"r'C:\Program Files\SASHome\jre\bin\java.exe'" in text
+    assert "\\\\" not in text
+
+
+def test_windows_path_config_still_imports_correctly():
+    """The raw string must round-trip to the exact original path."""
+    p = r"C:\Program Files\Java\jdk-17\bin\java.exe"
+    ns = load(ic.build_oda_config("us1", java=p))
+    assert ns["oda"]["java"] == p
+
+
+def test_posix_path_uses_plain_quotes():
+    text = ic.build_oda_config("us1", java="/usr/bin/java")
+    assert "'/usr/bin/java'" in text
+    assert "r'/usr/bin/java'" not in text
+
+
+def test_list_values_render_each_element():
+    ns = load(ic.build_oda_config("us1"))
+    assert len(ns["oda"]["iomhost"]) == 2
+
+
+# --- Java discovery ----------------------------------------------------------
+
+
+def test_java_from_dir_accepts_the_executable_itself(tmp_path):
+    exe = tmp_path / ("java.exe" if sys.platform.startswith("win") else "java")
+    exe.write_text("x")
+    assert ic.java_from_dir(exe) == exe
+
+
+def test_java_from_dir_accepts_a_java_home(tmp_path):
+    """People paste JAVA_HOME as often as the executable path."""
+    name = "java.exe" if sys.platform.startswith("win") else "java"
+    exe = tmp_path / "bin" / name
+    exe.parent.mkdir()
+    exe.write_text("x")
+    assert ic.java_from_dir(tmp_path) == exe
+
+
+def test_java_from_dir_accepts_a_jre_subfolder(tmp_path):
+    """SAS's private JRE nests the executable under jre/bin."""
+    name = "java.exe" if sys.platform.startswith("win") else "java"
+    exe = tmp_path / "jre" / "bin" / name
+    exe.parent.mkdir(parents=True)
+    exe.write_text("x")
+    assert ic.java_from_dir(tmp_path) == exe
+
+
+def test_java_from_dir_returns_none_when_absent(tmp_path):
+    assert ic.java_from_dir(tmp_path) is None
+
+
+def test_resolve_java_arg_rejects_a_bad_path(tmp_path):
+    with pytest.raises(ic.ConfigExists, match="No java executable"):
+        ic.resolve_java_arg(str(tmp_path / "nope"))
+
+
+def test_resolve_java_arg_strips_copied_quotes(tmp_path):
+    """Windows 'Copy as path' wraps the path in double quotes."""
+    with pytest.raises(ic.ConfigExists, match="No java executable"):
+        ic.resolve_java_arg(f'"{tmp_path / "nope"}"')
+
+
+def test_resolve_java_arg_falls_back_to_detection():
+    assert ic.resolve_java_arg(None) == ic.detect_java()
+
+
+# --- Windows Java discovery (fixture tree, runs on any platform) -------------
+
+
+def _touch(p):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("x")
+    return p
+
+
+def test_finds_the_jre_that_ships_with_sas(tmp_path):
+    """SAS 9.4 for Windows bundles a private JRE. Anyone with local Windows
+    SAS already has Java, so finding this means they install nothing."""
+    sashome = tmp_path / "SASHome"
+    jre = _touch(
+        sashome / "SASPrivateJavaRuntimeEnvironment" / "9.4" / "jre" / "bin"
+        / "java.exe"
+    )
+    found = ic._windows_candidates(sas_homes=[sashome], program_files=[])
+    assert str(jre) in found
+
+
+def test_sas_jre_is_preferred_over_other_jdks(tmp_path):
+    sashome = tmp_path / "SASHome"
+    sas_jre = _touch(
+        sashome / "SASPrivateJavaRuntimeEnvironment" / "9.4" / "jre" / "bin"
+        / "java.exe"
+    )
+    pf = tmp_path / "Program Files"
+    _touch(pf / "Java" / "jdk-17" / "bin" / "java.exe")
+    found = ic._windows_candidates(sas_homes=[sashome], program_files=[pf])
+    assert found[0] == str(sas_jre)
+
+
+def test_finds_vendor_jdks_in_program_files(tmp_path):
+    pf = tmp_path / "Program Files"
+    adoptium = _touch(pf / "Eclipse Adoptium" / "jdk-21" / "bin" / "java.exe")
+    found = ic._windows_candidates(sas_homes=[], program_files=[pf])
+    assert str(adoptium) in found
+
+
+def test_newer_jdk_versions_come_first(tmp_path):
+    pf = tmp_path / "Program Files"
+    _touch(pf / "Java" / "jdk-11" / "bin" / "java.exe")
+    newer = _touch(pf / "Java" / "jdk-21" / "bin" / "java.exe")
+    found = ic._windows_candidates(sas_homes=[], program_files=[pf])
+    assert found[0] == str(newer)
+
+
+def test_windows_search_tolerates_missing_directories(tmp_path):
+    assert ic._windows_candidates(
+        sas_homes=[tmp_path / "nothing"], program_files=[tmp_path / "nope"]
+    ) == []
+
+
+# --- guidance when Java is not found -----------------------------------------
+
+
+def test_unverified_java_help_names_the_file_to_edit(tmp_path):
+    target = tmp_path / "sascfg_personal.py"
+    msg = ic.unverified_java_help(target)
+    assert str(target) in msg
+    assert "'java'" in msg
+    assert "doctor" in msg
+
+
+def test_prompt_for_java_accepts_a_verified_path(tmp_path, monkeypatch):
+    exe = tmp_path / "java"
+    exe.write_text("x")
+    monkeypatch.setattr(ic, "_java_runs", lambda p: True)
+    monkeypatch.setattr(ic, "java_from_dir", lambda p: exe)
+    assert ic.prompt_for_java(ask=lambda _: str(exe)) == str(exe)
+
+
+def test_prompt_for_java_skips_on_blank_input():
+    assert ic.prompt_for_java(ask=lambda _: "") is None
+
+
+def test_prompt_for_java_gives_up_after_repeated_bad_input(tmp_path):
+    """Must not loop forever when the user keeps mistyping."""
+    assert ic.prompt_for_java(ask=lambda _: str(tmp_path / "nope")) is None
+
+
 # --- CLI wiring --------------------------------------------------------------
 
 
