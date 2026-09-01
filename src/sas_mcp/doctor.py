@@ -220,13 +220,20 @@ def load_config(path: Path) -> tuple[Check, dict[str, Any]]:
 
 
 def access_method(cfg: dict[str, Any]) -> str:
-    """Infer which SASPy access method a config selects."""
-    if "iomhost" in cfg:
+    """Infer which SASPy access method a config selects.
+
+    Order matters and mirrors SASConfig's own precedence: 'java' selects IOM
+    regardless of whether iomhost is present, and a local Windows IOM session
+    is exactly the case where iomhost is absent.
+    """
+    if "java" in cfg:
         return "IOM"
-    if "url" in cfg:
+    if "url" in cfg or "ip" in cfg:
         return "HTTP"
     if "ssh" in cfg:
         return "SSH"
+    if "provider" in cfg:
+        return "COM"
     if "saspath" in cfg:
         return "STDIO"
     return "unknown"
@@ -424,6 +431,42 @@ def check_encoding(cfg: dict[str, Any]) -> Check:
     )
 
 
+def check_com(cfg: dict[str, Any]) -> list[Check]:
+    """COM avoids the Java dependency entirely, but is Windows-only."""
+    out: list[Check] = []
+    if not sys.platform.startswith("win"):
+        out.append(
+            _fail(
+                "com_platform",
+                "This config uses the COM access method, which only works on "
+                f"Windows (this machine is {sys.platform}).",
+                "Use a different configuration on this platform -- STDIO for "
+                "local UNIX SAS, or IOM/SSH for a remote server.",
+            )
+        )
+        return out
+
+    try:
+        import win32com.client  # noqa: F401
+    except ImportError:
+        out.append(
+            _fail(
+                "pywin32",
+                "COM requires the pywin32 package, which is not installed.",
+                "pip install pywin32",
+            )
+        )
+    else:
+        out.append(_ok("pywin32", "pywin32 is installed."))
+
+    if not cfg.get("provider"):
+        out.append(
+            _fail("com_provider", "No 'provider' set for the COM connection.",
+                  "Set 'provider': 'sas.iomprovider'.")
+        )
+    return out
+
+
 def check_saspath(cfg: dict[str, Any]) -> list[Check]:
     """For local STDIO connections, the SAS executable must actually be there."""
     path = cfg.get("saspath")
@@ -484,8 +527,20 @@ def run_diagnostics(
                 )
                 if method == "IOM":
                     checks.extend(check_java(config))
-                    checks.extend(check_authinfo(config))
+                    # A local Windows IOM session has no iomhost and needs no
+                    # credentials, so only look for authinfo when the config
+                    # actually authenticates somewhere.
+                    if config.get("iomhost") or config.get("authkey"):
+                        checks.extend(check_authinfo(config))
+                    else:
+                        checks.append(
+                            Check("iom_local", INFO,
+                                  "No iomhost set, so SASPy will start a local "
+                                  "Windows SAS session. No credentials needed.")
+                        )
                     checks.extend(check_iom_hosts(config, probe=probe_network))
+                elif method == "COM":
+                    checks.extend(check_com(config))
                 elif method == "STDIO":
                     checks.extend(check_saspath(config))
                 elif method in {"SSH", "HTTP"}:

@@ -50,7 +50,10 @@ def test_load_config_flags_names_without_dicts(tmp_path):
 @pytest.mark.parametrize(
     "cfg,expected",
     [
-        ({"iomhost": "h"}, "IOM"),
+        ({"java": "java", "iomhost": "h"}, "IOM"),
+        # Local Windows SAS: IOM with no iomhost at all.
+        ({"java": "java", "encoding": "windows-1252"}, "IOM"),
+        ({"provider": "sas.iomprovider"}, "COM"),
         ({"url": "https://x"}, "HTTP"),
         ({"ssh": "ssh"}, "SSH"),
         ({"saspath": "/opt/sas"}, "STDIO"),
@@ -59,6 +62,33 @@ def test_load_config_flags_names_without_dicts(tmp_path):
 )
 def test_access_method_inference(cfg, expected):
     assert doctor.access_method(cfg) == expected
+
+
+def test_com_config_rejected_off_windows():
+    checks = doctor.check_com({"provider": "sas.iomprovider"})
+    if sys.platform.startswith("win"):
+        assert all(c.status != doctor.FAIL or c.name == "pywin32" for c in checks)
+    else:
+        assert checks[0].name == "com_platform"
+        assert checks[0].status == doctor.FAIL
+
+
+def test_local_windows_iom_does_not_demand_credentials(tmp_path, monkeypatch):
+    """winlocal has no iomhost and needs no authinfo; warning about a missing
+    credential file there would be noise."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    cfg = pkg / "sascfg_personal.py"
+    cfg.write_text(
+        "SAS_config_names=['winlocal']\n"
+        "winlocal={'java':'java','encoding':'windows-1252'}\n"
+    )
+    monkeypatch.setattr(doctor, "find_config",
+                        lambda mod, cfgfile=None: ([doctor._ok("config_file", "x")], cfg))
+    report = doctor.run_diagnostics(probe_network=False)
+    names = {c["name"] for c in report["checks"]}
+    assert "iom_local" in names
+    assert "authinfo" not in names
 
 
 # --- ODA hostnames -----------------------------------------------------------

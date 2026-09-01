@@ -316,6 +316,54 @@ The log parser and guardrails are pure functions with no SAS dependency, and
 the server tests run against a fake session — so the full suite runs anywhere.
 CI runs them on Linux, macOS, and Windows against Python 3.10, 3.12, and 3.14.
 
+### Testing on Windows
+
+CI runs the suite on Windows, but that cannot reach a SAS installation. To
+test against real Windows SAS, on the Windows machine:
+
+```powershell
+# No PyPI release needed -- install straight from the repo
+pip install git+https://github.com/matise-joe-norc/sas-mcp
+
+sas-mcp init      # choose the COM option first; it needs no Java
+sas-mcp doctor
+```
+
+Local Windows SAS has two access methods, and **COM is worth trying first**:
+it needs no Java at all, which removes the most common Windows setup failure.
+It does need `pip install pywin32`. The IOM option is the fallback if COM
+gives trouble.
+
+Then exercise the server end to end:
+
+```powershell
+python -c "from sas_mcp.session import SASSessionManager as M; m=M(cfgname='wincom'); r=m.submit('data work.a; set sashelp.class; run;'); print(r.triage.status, r.triage.summary)"
+```
+
+Expect `ok  Ran: created WORK.A=19 obs.` A result of `ok` with **no steps
+reported** means the log has no NOTEs — see the `options notes` note below.
+
+The two things most likely to differ from the verified Linux/ODA path:
+
+- **Encoding.** Windows SAS 9.4 typically runs `wlatin1`, not UTF-8. A
+  mismatch shows up as mojibake in character columns rather than an error.
+  `sas-mcp doctor` reports the configured value.
+- **`NONOTES`.** SASPy's IOM sessions suppress the `NOTE:` lines that log
+  triage depends on. The session manager sets `options notes source;` on
+  connect; if a Windows session somehow overrides that, `run_sas` would
+  return `ok` with empty `steps` and no `suspicious_notes`.
+
+To confirm triage is really working rather than silently blind, run something
+that *should* be flagged:
+
+```powershell
+python -c "from sas_mcp.session import SASSessionManager as M; m=M(cfgname='wincom'); r=m.submit('data work.b; set sashelp.class; bmi=weigth/height; run;'); print(r.triage.status, [n.rule for n in r.triage.suspicious_notes])"
+```
+
+Expect `suspicious ['uninitialized_variable', 'missing_values_generated']`.
+If that returns `ok` with an empty list, triage is not seeing NOTEs and the
+result is untrustworthy — report it as a bug.
+
 ### Releasing
 
 The version lives in exactly one place: `__version__` in

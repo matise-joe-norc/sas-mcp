@@ -83,12 +83,25 @@ def test_iom_config_shape():
     assert cfg["authkey"] == "prod"
 
 
-def test_winlocal_config_builds_a_classpath():
-    text = ic.build_winlocal_config(r"C:\Program Files\SASHome")
-    ns = load(text)
+def test_winlocal_config_matches_saspys_own_stanza():
+    """Local Windows IOM is selected by the ABSENCE of iomhost. SASPy starts
+    the local session itself, so no host, port, or classpath belongs here."""
+    ns = load(ic.build_winlocal_config())
     cfg = ns["winlocal"]
-    assert "sas.svc.connection.jar" in cfg["classpath"]
     assert cfg["encoding"] == "windows-1252"
+    assert "java" in cfg
+    assert "iomhost" not in cfg
+    assert "iomport" not in cfg
+    assert "classpath" not in cfg
+
+
+def test_wincom_config_needs_no_java():
+    """COM's whole advantage on Windows is skipping the Java dependency."""
+    ns = load(ic.build_wincom_config())
+    cfg = ns["wincom"]
+    assert cfg["provider"] == "sas.iomprovider"
+    assert "java" not in cfg
+    assert "classpath" not in cfg
 
 
 def test_custom_config_name_used_throughout():

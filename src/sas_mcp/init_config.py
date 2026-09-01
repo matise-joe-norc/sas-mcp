@@ -195,35 +195,29 @@ def build_iom_config(host: str, port: int = 8591, name: str = "iomserver",
     return _HEADER.format(names=repr(name)) + _render_dict(name, entries)
 
 
-def build_winlocal_config(sashome: str, name: str = "winlocal",
-                          java: str | None = None,
+def build_winlocal_config(name: str = "winlocal", java: str | None = None,
                           encoding: str = "windows-1252") -> str:
-    """Config for SAS installed locally on Windows (IOM via a local bridge).
+    """Config for SAS installed locally on Windows, over IOM.
 
-    This one needs the SAS Java client jars from the SAS installation, so the
-    generated classpath is a best guess that the user should verify.
+    Local mode is selected by the *absence* of 'iomhost' -- SASPy starts the
+    local SAS itself, so no host, port, or classpath is involved. Matches the
+    ``winlocal`` stanza in SASPy's own shipped template.
     """
-    base = sashome.rstrip("\\/")
-    jars = [
-        rf"{base}\SASDeploymentManager\9.4\products\deploywiz__94xxx__prt__xx__sp0__1\deploywiz\sas.svc.connection.jar",
-        rf"{base}\SASDeploymentManager\9.4\products\deploywiz__94xxx__prt__xx__sp0__1\deploywiz\log4j.jar",
-        rf"{base}\SASDeploymentManager\9.4\products\deploywiz__94xxx__prt__xx__sp0__1\deploywiz\sas.security.sspi.jar",
-        rf"{base}\SASDeploymentManager\9.4\products\deploywiz__94xxx__prt__xx__sp0__1\deploywiz\sas.core.jar",
-    ]
-    body = (
-        "# NOTE: verify these jar paths against your SAS installation; the\n"
-        "# deploywiz directory name varies by SAS release.\n"
-        "cp = ';'.join([\n"
-        + "".join(f"    r{j!r},\n" for j in jars)
-        + "])\n\n"
+    return _HEADER.format(names=repr(name)) + _render_dict(
+        name, {"java": java or "java", "encoding": encoding}
     )
-    entries: dict[str, Any] = {
-        "java": java or "java",
-        "encoding": encoding,
-        "classpath": "@CP@",
-    }
-    rendered = _render_dict(name, entries).replace("'@CP@'", "cp")
-    return _HEADER.format(names=repr(name)) + body + rendered
+
+
+def build_wincom_config(name: str = "wincom",
+                        encoding: str = "windows-1252") -> str:
+    """Config for local Windows SAS over the COM interface.
+
+    COM needs no Java at all, which removes the single most common setup
+    failure on Windows. It requires pywin32 and works only on Windows.
+    """
+    return _HEADER.format(names=repr(name)) + _render_dict(
+        name, {"provider": "sas.iomprovider", "encoding": encoding}
+    )
 
 
 # --- writing files -----------------------------------------------------------
@@ -305,7 +299,8 @@ def write_authinfo_entry(key: str, user: str, password: str,
 DEPLOYMENTS = (
     ("oda", "SAS OnDemand for Academics (free, cloud)"),
     ("unix", "SAS installed locally on this Linux/UNIX machine"),
-    ("winlocal", "SAS installed locally on this Windows machine"),
+    ("wincom", "SAS installed locally on this Windows machine (COM, no Java)"),
+    ("winlocal", "SAS installed locally on this Windows machine (IOM, needs Java)"),
     ("iom", "SAS server on my network (IOM / Workspace Server)"),
     ("ssh", "SAS on a remote UNIX host over SSH"),
 )
@@ -380,11 +375,15 @@ def interactive_init(force: bool = False,
         text = build_stdio_config(saspath, name=name)
         result["saspath"] = saspath
 
+    elif kind == "wincom":
+        print(
+            "  COM needs no Java, but does need pywin32:  pip install pywin32"
+        )
+        text = build_wincom_config(name=name)
+
     elif kind == "winlocal":
-        sashome = _ask("SASHome directory", r"C:\Program Files\SASHome")
         java = _java_or_warn()
-        text = build_winlocal_config(sashome, name=name, java=java)
-        result["sashome"] = sashome
+        text = build_winlocal_config(name=name, java=java)
 
     elif kind == "iom":
         host = _ask("SAS server hostname")
